@@ -159,11 +159,11 @@ test('compact dashboard separates tokens without attaching separators to heading
   assert.match(description,/^\*\*DREAD\*\* · SOLANA$/m);
   assert.match(description,/^\*\*MOON\*\* · BASE$/m);
   assert.match(description,/CA \x60[^\x60]+\x60\n\n────────────\n\*\*MOON\*\* · BASE/);
-  assert.match(description,/\*\*MC \$120\.00K\*\*/);
-  assert.match(description,/🟩 \+8\.00%/);
-  assert.match(description,/🟥 -2\.00%/);
-  assert.match(description,/\[View chart\]\(https:\/\/dexscreener\.com\/solana\/demo\)/);
-  assert.doesNotMatch(description,/──── \*\*|\x60{3}ansi/);
+  assert.match(description,/\x60{3}ansi\nMC \x1b\[1;36m\$120\.00K\x1b\[0m/);
+  assert.match(description,/\x1b\[1;32m🟩 \+8\.00%\x1b\[0m/);
+  assert.match(description,/\x1b\[1;31m🟥 -2\.00%\x1b\[0m/);
+  assert.match(description,/\x60{3}\n\n\[View chart\]\(https:\/\/dexscreener\.com\/solana\/demo\)/);
+  assert.doesNotMatch(description,/──── \*\*/);
   assert.equal(description.split('────────────').length-1,3);
   assert.ok(description.split('────────────').every((segment,index)=>index===0 || !segment.startsWith('\n\n')));
 });
