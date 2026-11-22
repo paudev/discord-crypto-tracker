@@ -40,7 +40,7 @@ test('formats tiny token prices and safe token fields', () => {
     marketCap: 550000, priceChange: { m5: 1.5, h24: -3.2 }, url: 'https://dexscreener.com/solana/abc'
   } }], new Date('2026-11-23T00:00:00Z'));
   assert.match(embed.fields[0].value, /\$0\.01/);
-  assert.match(embed.fields[0].value, /💰 \*\*MARKET CAP · \$550\.00K\*\*/);
+  assert.match(embed.fields[0].value, /💰 \*\*MARKET CAP\*\*\n\*\*\$550\.00K\*\*/);
   assert.doesNotMatch(embed.fields[0].name, /@/);
   assert.equal(embed.timestamp, '2026-11-23T00:00:00.000Z');
 });
@@ -62,13 +62,15 @@ test('market cap is primary and other metrics have comfortable spacing', () => {
   assert.equal(embed.color, 0x2ecc71);
   assert.match(embed.fields[0].name, /^🟢 DREAD/);
   const lines = embed.fields[0].value.split('\n');
-  assert.equal(lines.length, 6);
-  assert.equal(lines[0], '💰 **MARKET CAP · $38.94K**');
-  assert.equal(lines[1], '');
-  assert.ok(lines[2].includes('**Price** · **$0.00004431**'));
-  assert.ok(lines[3].includes('**24h** 🟢 **+52.45%**') && lines[3].includes('**5m** **—**'));
-  assert.ok(lines[4].includes('**Liquidity** · **$13.61K**'));
-  assert.ok(lines[5].includes('View chart') && lines[5].includes('So111111…111112'));
+  assert.equal(lines.length, 8);
+  assert.equal(lines[0], '💰 **MARKET CAP**');
+  assert.equal(lines[1], '**$38.94K**');
+  assert.equal(lines[2], '');
+  assert.ok(lines[3].includes('**Price**  $0.00004431'));
+  assert.ok(lines[4].includes('**24h** 🟢 **+52.45%**') && lines[4].includes('**5m** —'));
+  assert.ok(lines[5].includes('💧 **Liquidity**  $13.61K'));
+  assert.equal(lines[6], '');
+  assert.ok(lines[7].includes('View chart') && lines[7].includes('So111111…111112'));
   assert.ok(!embed.fields[0].value.includes(SOL));
 });
 
@@ -79,7 +81,7 @@ test('negative token has red accent and compact signed changes', () => {
   }]);
   assert.equal(embed.color, 0xe74c3c);
   assert.match(embed.fields[0].name, /^🔴/);
-  assert.ok(embed.fields[0].value.includes('**5m** **-0.30%**'));
+  assert.ok(embed.fields[0].value.includes('**5m** -0.30%'));
   assert.ok(embed.fields[0].value.includes('**24h** 🔴 **-10.20%**'));
 });
 

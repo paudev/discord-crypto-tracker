@@ -7,15 +7,17 @@ A standalone, **free API** Discord price dashboard with **slash commands**. Verc
 - Supports Solana and EVM networks: Solana, Ethereum, Base, BSC, Arbitrum, Polygon, Avalanche, Ronin (where supported by DEX Screener).
 - Uses the public [DEX Screener API](https://docs.dexscreener.com/api/reference); **no API key required**. Looks up pools by token contract address and chooses the **highest USD-liquidity pool where that token is the base asset**, to avoid showing the quote token's price by mistake.
 - Price, 5-minute and 24-hour price change, market cap (or separately labeled FDV), liquidity, contract address, DEX Screener chart link.
-- Up to 12 tracked tokens, displayed in **one balanced Discord embed** edited in place. **Market cap is the first, boldest metric**, with a blank line separating it from the price, combined 24h/5m changes, liquidity, and a shortened contract plus chart link. The accent and per-token symbols reflect price movement. `/tracker list` provides full contract addresses.
+- Up to 12 tracked tokens, displayed in **one balanced Discord embed** edited in place. **Market cap is shown prominently on two lines**, followed by a spacer, price, compact 24h/5m changes, liquidity, and a chart/contract row. The accent and per-token symbols reflect price movement. `/tracker list` provides full contract addresses.
 - `/tracker add chain:solana address:<token-CA>` — add a token. On first use, the dashboard appears in the channel where you run the command.
 - `/tracker remove address:<token-CA>` — remove a token (optionally select network if duplicated).
 - `/tracker list` — show tracked chains, contracts and the dashboard channel.
-- `/tracker channel target:#crypto-prices` — initialize or move the dashboard.
+- `/tracker storage target:#crypto-tracker-data` — select the existing private data channel (you control its category and per-role visibility).
+- `/tracker cleanup` — safely merge watchlists and remove duplicate bot-created data channels with no unrelated messages.
+- `/tracker channel target:#crypto-prices` — move the dashboard.
 - `/tracker refresh` — refresh immediately.
 - `/tracker help` — show commands.
 - **Manage Server** Discord permission required for all `/tracker` commands; replies are private (ephemeral).
-- Automatically creates a **private `crypto-tracker-data` channel** that holds one JSON configuration message. This is the persistent source of truth for the watchlist and dashboard location, with no Redis, paid database or Vercel filesystem writes. Do not delete or alter that private channel or message.
+- **You select the storage channel** with `/tracker storage target:#your-private-data-channel`. The bot no longer automatically creates `crypto-tracker-data` channels. Drag the selected channel to any category and configure which roles/members can View Channel in Discord; the bot preserves its category and permission overrides. A short marker in the channel topic lets the bot find it even if renamed. The JSON configuration message is the persistent watchlist; do not delete it. `/tracker cleanup` conservatively merges watchlists and removes safe bot-created duplicate data channels only when explicitly invoked.
 - Only one current dashboard message; refreshes edit it instead of spamming chat.
 
 ## Deployment architecture
@@ -78,11 +80,12 @@ This registers one **guild-scoped `/tracker`** command with subcommands in your 
 
 In a Discord text channel that the bot can post to (e.g. `#crypto-prices`):
 
-- Run `/tracker channel target:#crypto-prices` to choose the destination, then `/tracker add chain:solana address:<CA>`.
-- Or run `/tracker add` directly in the channel where you want the dashboard; that channel becomes the dashboard automatically.
+- Create an existing private text channel wherever you like and set its channel permissions. Grant SpicyTracker View Channel, Read Message History, Send Messages and Manage Channels there. Run `/tracker storage target:#your-private-channel` from a separate public or admin command channel. The bot will never create a data channel automatically.
+- Run `/tracker channel target:#crypto-prices` to choose the public dashboard destination, then `/tracker add chain:solana address:<CA>`.
+- Or run `/tracker add` directly in the channel where you want the dashboard after storage is selected.
 - Use `/tracker list` to inspect the watchlist. Use `/tracker remove` to remove by contract address.
 
-The bot automatically creates private `#crypto-tracker-data` to persist the watchlist, and posts one embed in the chosen destination. Avoid editing the configuration message or deleting that private channel.
+The bot does not create storage channels automatically. The selected channel holds its configuration message; you may move it between categories, rename it, or change who can view it. Do not remove the storage marker from its topic or block SpicyTracker from viewing its own data. If duplicates already exist, run `/tracker cleanup` after selecting your preferred storage channel. The cleanup command skips anything with unrelated or unreadable messages.
 
 ## 5. Enable one-minute Cloudflare updates (free tier)
 
@@ -126,3 +129,9 @@ npm install
 npm test
 npm run check
 ```
+
+## Permissions and channel organization
+
+The storage channel belongs wherever you put it. Its role/member overwrites are never modified by the bot. Under **Edit Channel → Permissions**, deny **View Channel** to `@everyone`, allow **View Channel** for the roles or members you choose, and allow the bot **View Channel**, **Read Message History**, **Send Messages**, **Manage Channels** (required to mark the selected storage channel in its topic). Changes to a category can resync permissions, so inspect the channel after moving it. Admins with server-wide Administrator permission can always see it.
+
+The price dashboard is a separate text channel, set with `/tracker channel`. You can restrict that channel to selected members the same way; give the bot View Channel, Send Messages, Embed Links and Read Message History. The watchlist contents include token addresses and dashboard IDs, never bot tokens or API secrets.

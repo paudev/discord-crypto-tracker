@@ -1,6 +1,6 @@
 import { CHAIN_CHOICES, MAX_TOKENS, safeText } from './discord.js';
 import { normalizeToken, fetchTokenPair } from './dexscreener.js';
-import { ensureStore, loadStore, publishDashboard, saveStore } from './tracker.js';
+import { cleanupStores, loadStore, publishDashboard, saveStore, selectStorageChannel } from './tracker.js';
 
 const STRING = 3;
 const CHANNEL = 7;
@@ -26,6 +26,10 @@ export const TRACKER_COMMAND = {
     { type: SUBCOMMAND, name: 'channel', description: 'Move the price dashboard to a text channel', options: [
       { type: CHANNEL, name: 'target', description: 'Where price updates should appear', required: true, channel_types: [0] },
     ] },
+    { type: SUBCOMMAND, name: 'storage', description: 'Choose an existing private text channel for tracker data', options: [
+      { type: CHANNEL, name: 'target', description: 'Your private data channel (move it and set role permissions in Discord)', required: true, channel_types: [0] },
+    ] },
+    { type: SUBCOMMAND, name: 'cleanup', description: 'Safely remove redundant bot-created data channels' },
     { type: SUBCOMMAND, name: 'help', description: 'Show tracker commands and setup instructions' },
   ],
 };
@@ -44,7 +48,9 @@ const helpText = [
   '• `/tracker remove address:<CA>` — stop tracking a token',
   '• `/tracker list` — list all tracked tokens',
   '• `/tracker refresh` — fetch the latest prices now',
-  '• `/tracker channel target:#crypto-prices` — move the dashboard',
+  '• `/tracker channel target:#crypto-prices` — move the public dashboard',
+  '• `/tracker storage target:#my-private-channel` — choose the private storage channel; set roles/categories in Discord',
+  '• `/tracker cleanup` — merge watchlists and remove safe duplicate bot-created storage channels',
   `Maximum: **${MAX_TOKENS} tokens**. Powered by DEX Screener (no paid API key).`,
 ].join('\n');
 
@@ -59,11 +65,28 @@ export async function executeTrackerCommand({ interaction, client, applicationId
   if (!command) return helpText;
   if (command.name === 'help') return helpText;
 
+  if (command.name === 'storage') {
+    const targetId = optionValue(command, 'target');
+    try {
+      const result = await selectStorageChannel(client, {
+        guildId, targetId, fallbackDashboardChannelId: interaction.channel_id,
+      });
+      return `✅ Storage set to <#${result.channelId}>. Preserved **${result.tokens}** tracked tokens. Move that channel to any category and set its permissions in Discord. Keep SpicyTracker able to View Channel, Send Messages, and Read Message History. Use \`/tracker cleanup\` to remove old duplicates.`;
+    } catch (error) {
+      return `Could not set storage: ${safeText(error.message, 270)}`;
+    }
+  }
+  if (command.name === 'cleanup') {
+    const result = await cleanupStores(client, guildId);
+    if (result.reason) return result.reason;
+    return `✅ Kept storage <#${result.kept}> with **${result.tokens}** tokens. Removed **${result.removed.length}** redundant channels; skipped **${result.skipped.length}** channels with unsafe or unreadable content.`;
+  }
   if (command.name === 'add') {
     const token = normalizeToken(optionValue(command, 'chain'), optionValue(command, 'address'));
     const pair = await fetchTokenPair(token, fetcher);
     if (!pair) return 'Could not find a priced base-token pool for this contract on that chain. Check the address and chain in DEX Screener.';
-    const store = await ensureStore(client, { guildId, applicationId, channelId: interaction.channel_id });
+    const store = await loadStore(client, guildId);
+    if (!store) return 'No data channel configured. Create a private text channel, then run `/tracker storage target:#your-private-channel` before adding tokens.';
     if (store.config.tokens.some(x => x.chain === token.chain && x.address === token.address)) return 'That token is already being tracked.';
     if (store.config.tokens.length >= MAX_TOKENS) return `This dashboard supports a maximum of ${MAX_TOKENS} tokens.`;
     store.config.tokens.push(token);
@@ -78,21 +101,12 @@ export async function executeTrackerCommand({ interaction, client, applicationId
   }
 
   const store = await loadStore(client, guildId);
-  if (!store) {
-    if (command.name === 'channel') {
-      const channelId = optionValue(command, 'target');
-      const created = await ensureStore(client, { guildId, applicationId, channelId });
-      try { await publishDashboard(client, created, { fetcher }); }
-      catch (error) { console.error('[tracker:channel]', error.message); return '✅ Dashboard channel saved, but I could not post there. Check the bot’s permissions.'; }
-      return `✅ Dashboard initialized in <#${channelId}>. Add tokens using "/tracker add".`;
-    }
-    return 'No watchlist configured yet. Run `/tracker add` or `/tracker channel` to initialize one.';
-  }
+  if (!store) return 'No watchlist configured. Create a private text channel and run `/tracker storage target:#your-private-channel` to initialize storage.';
   if (command.name === 'list') {
     if (!store.config.tokens.length) return `No tokens tracked yet. Dashboard: <#${store.config.dashboardChannelId}>.`;
     return `**Tracked tokens (${store.config.tokens.length}/${MAX_TOKENS}):**\n` + store.config.tokens
       .map((x, i) => `${i + 1}. **${x.chain}** · \`${x.address}\``).join('\n')
-      + `\nDashboard: <#${store.config.dashboardChannelId}>`;
+      + `\nDashboard: <#${store.config.dashboardChannelId}> · Storage: <#${store.configChannelId}>`;
   }
   if (command.name === 'remove') {
     const address = String(optionValue(command, 'address') || '').trim();
@@ -109,6 +123,7 @@ export async function executeTrackerCommand({ interaction, client, applicationId
   if (command.name === 'channel') {
     const channelId = optionValue(command, 'target');
     if (!channelId || !/^\d{16,22}$/.test(channelId)) return 'Select a valid text channel.';
+    if (channelId === store.configChannelId) return 'Storage and dashboard must use different channels.';
     const channels = await client.request(`/guilds/${guildId}/channels`);
     if (!channels.some(x => x.id === channelId && x.type === 0)) return 'The target must be a text channel in this server.';
     const previous = { channelId: store.config.dashboardChannelId, messageId: store.config.dashboardMessageId };
