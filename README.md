@@ -153,7 +153,7 @@ The bot can send a **new message** to a server-manager-selected text channel whe
 - `/tracker ath-channel target:#market-cap-alerts` enables notifications. Set `min-increase` optionally (0–100%); omitted = 0, which reports **each** newly recorded high.
 - `/tracker ath-channel target:#market-cap-alerts min-increase:5` suppresses small records until market cap is at least 5% above the last notified high. Alerts can still be frequent if the market rises quickly.
 - `/tracker ath-status` shows the destination, threshold, and each tracked token's observed high.
-- `/tracker ath-preview` posts **one simulated alert** using the first tracked token, the latest DEX Screener market cap, and a fictional previous high 15% lower. It defaults to the configured ATH channel or the channel where you run the command. It works even if real ATH alerts are disabled.
+- `/tracker ath-preview` posts **one simulated alert** using the first tracked token, the latest DEX Screener market cap, and a fictional previous high that makes the current market cap exactly 15% higher. It defaults to the configured ATH channel or the channel where you run the command. It works even if real ATH alerts are disabled.
 - `/tracker ath-preview token:DREAD increase:20` previews a specific tracked symbol with a simulated 20% increase. You can also supply a tracked contract address in `token` and optionally choose a `target` text channel. If multiple tokens share a symbol, use the contract.
 - Preview messages are visibly labeled **PREVIEW / TEST ONLY** and **never update** stored highs, dashboard messages or notification settings.
 - `/tracker ath-off` disables new alerts but preserves recorded highs.
