@@ -52,8 +52,8 @@ test("three tracked tokens retain color, direction emojis, readable spacing and 
   assert.ok(d.endsWith('────────────────────'));
   assert.ok(d.indexOf('**DREAD**')<d.indexOf('**CoT**')&&d.indexOf('**CoT**')<d.indexOf('**REALM**'));
   assert.match(d,/\*\*MC \$29\.82K\*\*/);
-  assert.match(d,/24h \*\*⬆️ \+16\.76%\*\*  ·  5m \*\*⬇️ -3\.90%\*\*/);
-  assert.match(d,/24h \*\*⬇️ -2\.00%\*\*  ·  5m \*\*⬆️ \+0\.36%\*\*/);
+  assert.match(d,/24h \*\*🟩 ▲ \+16\.76%\*\*  ·  5m \*\*🟥 ▼ -3\.90%\*\*/);
+  assert.match(d,/24h \*\*🟥 ▼ -2\.00%\*\*  ·  5m \*\*🟩 ▲ \+0\.36%\*\*/);
   assert.match(d,/24h \*\*➖ 0\.00%\*\*  ·  5m \*\*—\*\*/);
   assert.match(d,/Price \*\*\$0\.00003394\*\*  ·  Liq \*\*\$11\.75K\*\*/);
   assert.match(d,/Liq \*\*N\/A\*\*/);
@@ -66,7 +66,7 @@ test("dynamically added token has correct label without token-specific emojis", 
   const e=createDashboardEmbeds([{token:{chain:'base',address:ETH,symbol:'FUTURECOIN'},pair:{baseToken:{symbol:'FUTURECOIN'},marketCap:37500,priceUsd:0.5,priceChange:{h24:-7,m5:0}}}])[0];
   assert.match(e.description,/\*\*FUTURECOIN\*\*  ·  BASE/);
   assert.equal(e.description.split('────────────────────').length-1,2);
-  assert.match(e.description,/24h \*\*⬇️ -7\.00%\*\*  ·  5m \*\*➖ 0\.00%\*\*/);
+  assert.match(e.description,/24h \*\*🟥 ▼ -7\.00%\*\*  ·  5m \*\*➖ 0\.00%\*\*/);
 });
 
 test("twelve links and separators fit in a single Discord embed", function testLong(){
@@ -96,7 +96,7 @@ test("empty state uses branded accent", function testNoTokens(){
 test("FDV, missing change and zero liquidity remain accurate", function testFDV(){
  const e=createDashboardEmbeds([{token:{chain:'solana',address:SOL},pair:{baseToken:{symbol:'MINT'},priceUsd:0.5,fdv:90000,liquidity:{usd:0},priceChange:{h24:null,m5:-0.5}}}])[0];
  assert.match(e.description,/\*\*FDV \$90\.00K\*\*/);
- assert.match(e.description,/24h \*\*—\*\*  ·  5m \*\*⬇️ -0\.50%\*\*/);
+ assert.match(e.description,/24h \*\*—\*\*  ·  5m \*\*🟥 ▼ -0\.50%\*\*/);
  assert.match(e.description,/Liq \*\*\$0\*\*/);
 });
 
@@ -118,6 +118,6 @@ test('positive, negative and missing price-action indicators are intuitive',()=>
   {token:{chain:'solana',address:SOL},pair:{baseToken:{symbol:'A'},marketCap:10,priceChange:{h24:4.5,m5:-0.2}}},
   {token:{chain:'solana',address:SOL},pair:{baseToken:{symbol:'B'},marketCap:10,priceChange:{h24:0,m5:null}}}
  ]);
- assert.match(e[0].description,/24h \*\*⬆️ \+4\.50%\*\*.*5m \*\*⬇️ -0\.20%\*\*/);
+ assert.match(e[0].description,/24h \*\*🟩 ▲ \+4\.50%\*\*.*5m \*\*🟥 ▼ -0\.20%\*\*/);
  assert.match(e[0].description,/24h \*\*➖ 0\.00%\*\*.*5m \*\*—\*\*/);
 });

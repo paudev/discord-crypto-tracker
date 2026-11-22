@@ -7,7 +7,7 @@ A standalone, **free API** Discord price dashboard with **slash commands**. Verc
 - Supports Solana and EVM networks: Solana, Ethereum, Base, BSC, Arbitrum, Polygon, Avalanche, Ronin (where supported by DEX Screener).
 - Uses the public [DEX Screener API](https://docs.dexscreener.com/api/reference); **no API key required**. Looks up pools by token contract address and chooses the **highest USD-liquidity pool where that token is the base asset**, to avoid showing the quote token's price by mistake.
 - Price, 5-minute and 24-hour price change, market cap (or separately labeled FDV), liquidity, contract address, DEX Screener chart link.
-- Up to 12 dynamically tracked tokens in **one continually edited Discord message containing one embed**. Use a saturated, stable **Discord blurple accent (`#5865F2`)** for the card border (never red/green as a misleading overall market signal), and **⬆️ gain / ⬇️ loss / ➖ flat** solely as *price-action* indicators for 24h and 5m. No token-specific emojis or arbitrary icon selection; token symbols and chain names come from DEX Screener or saved configuration. MC is bold and on one line, followed by an airy change row and price/liquidity row; a shortened contract, clickable DEX chart, plus **opening, between-token, and closing** subtle dividers all remain. No ASCII box frames, separate token embeds, new channels, or GitHub Actions.
+- Up to 12 dynamically tracked tokens in **one continually edited Discord message containing one embed**. Use a saturated, stable **Discord blurple accent (`#5865F2`)** for the card border (never red/green as a misleading overall market signal), and **🟩 ▲ gain / 🟥 ▼ loss / ➖ flat** solely as *price-action* indicators for 24h and 5m. No token-specific emojis or arbitrary icon selection; token symbols and chain names come from DEX Screener or saved configuration. MC is bold and on one line, followed by an airy change row and price/liquidity row; a shortened contract, clickable DEX chart, plus **opening, between-token, and closing** subtle dividers all remain. No ASCII box frames, separate token embeds, new channels, or GitHub Actions.
 - `/tracker add chain:solana address:<token-CA>` — add a token. On first use, the dashboard appears in the channel where you run the command.
 - `/tracker remove address:<token-CA>` — remove a token (optionally select network if duplicated).
 - `/tracker list` — show tracked chains, contracts and the dashboard channel.
@@ -144,7 +144,7 @@ The private storage message is a readable embed: tracked-token count, dashboard 
 
 ### Discord color and formatting constraints
 
-Discord's normal embeds do not offer individually colored text or a custom card background. The bot uses a high-contrast **blurple (#5865F2) left border**, blue chart hyperlinks, and red/green price-chart emojis 📉/📈 only for actual movements. It does not use ANSI blocks, random icon mappings, additional token cards, or artificial box frames. Token identities remain dynamically resolved. The one dashboard message is updated in place.
+Discord's normal embeds do not offer individually colored text or a custom card background. The bot uses a high-contrast **blurple (#5865F2) left border**, blue chart hyperlinks, and red/green indicators 🟥 ▼ / 🟩 ▲ only for actual movements. It does not use ANSI blocks, random icon mappings, additional token cards, or artificial box frames. Token identities remain dynamically resolved. The one dashboard message is updated in place.
 
 ## Observed market-cap high alerts
 
@@ -161,4 +161,8 @@ New slash commands require **one re-registration** using the existing authentica
 
 ## Dashboard design contract
 
-Preserve all requirements together: one edited Discord message and one embed, dynamic token labels, no arbitrary/token-specific emoji mappings, vivid constant blurple accent (`#5865F2`), **⬆️/⬇️/➖ only for real price movement**, clear start/between/end dividers, comfortable whitespace, bold MC and value together on one line, 24h and 5m movements, price and liquidity, shortened CA, clickable chart, 12-token capacity, and safe empty/missing data. Keep existing private storage, slash commands, Cloudflare schedule, and Vercel configuration unchanged.
+Preserve all requirements together: one edited Discord message and one embed, dynamic token labels, no arbitrary/token-specific emoji mappings, vivid constant blurple accent (`#5865F2`), **🟩 ▲ / 🟥 ▼ / ➖ exclusively for observed price movement**, clear start/between/end dividers, comfortable whitespace, bold MC and value together on one line, 24h and 5m movements, price and liquidity, shortened CA, clickable chart, 12-token capacity, and safe empty/missing data. Keep existing private storage, slash commands, Cloudflare schedule, and Vercel configuration unchanged.
+
+### Price indicator contract
+
+For **both 24h and 5m**: increases use **🟩 ▲** (green square and up triangle), decreases use **🟥 ▼** (red square and down triangle), exact zero uses **➖**, and missing data is **—**. This is data-driven, never tied to the token's name. The overall dashboard border stays blurple because multiple tokens may move in different directions. Discord native embeds do not support true per-character font colors.

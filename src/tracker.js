@@ -324,8 +324,8 @@ function marketCapText(pair){const mc=Number(pair?.marketCap),fdv=Number(pair?.f
 function priceAction(value){
  const n=asChange(value);
  if(n===null)return "—";
- if(n>0)return "⬆️ "+formatChange(n);
- if(n<0)return "⬇️ "+formatChange(n);
+ if(n>0)return "🟩 ▲ "+formatChange(n);
+ if(n<0)return "🟥 ▼ "+formatChange(n);
  return "➖ "+formatChange(n);
 }
 
@@ -384,11 +384,11 @@ function createHighAlertEmbed(token, pair, previous, current, clock = new Date()
   const growth = (current / previous - 1) * 100;
   const chart = dexChartUrl(pair);
   return {
-    title: '⬆️ New observed market-cap high',
+    title: '🟩 ▲ New observed market-cap high',
     description: [
       '**' + symbol + '** · ' + chain,
       '',
-      '**MC ' + formatCompact(current, { usd: true }) + '**  ·  ⬆️ +' + growth.toFixed(2) + '%',
+      '**MC ' + formatCompact(current, { usd: true }) + '**  ·  🟩 ▲ +' + growth.toFixed(2) + '%',
       'Previous recorded high: **' + formatCompact(previous, { usd: true }) + '**',
       'Price ' + formatPrice(pair?.priceUsd) + (chart ? '  ·  [View chart ↗](' + chart + ')' : ''),
       'CA ' + String.fromCharCode(96) + shortAddress(token.address) + String.fromCharCode(96),
