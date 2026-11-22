@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cleanupStores, loadStore, publishDashboard, selectStorageChannel, serializeConfig } from '../src/tracker.js';
+import { cleanupStores, createStorageEmbed, loadStore, publishDashboard, saveStore, selectStorageChannel, serializeConfig } from '../src/tracker.js';
 import { executeTrackerCommand } from '../src/commands.js';
 
 const GUILD = '123456789012345678';
@@ -212,4 +212,68 @@ test('storage rejects channels belonging to another guild', async () => {
   await assert.rejects(selectStorageChannel(proxy, {
     guildId: GUILD, targetId: PRIVATE, fallbackDashboardChannelId: GENERAL,
   }), /different Discord server/);
+});
+
+
+test('new storage displays a readable embed and hides machine data in spoiler', async () => {
+  const client = createFakeDiscord();
+  await selectStorageChannel(client, { guildId: GUILD, targetId: PRIVATE, fallbackDashboardChannelId: GENERAL });
+  const message = client.messages.get(PRIVATE)[0];
+  assert.equal(message.content, '');
+  assert.equal(message.embeds.length, 1);
+  assert.match(message.embeds[0].title, /SpicyTracker · Private Storage/);
+  assert.match(message.embeds[0].description, /\|\|CRYPTO_TRACKER_CONFIG_V1/);
+  assert.match(message.embeds[0].fields[0].value, /0 \/ 12/);
+  const loaded = await loadStore(client, GUILD);
+  assert.equal(loaded.config.dashboardChannelId, GENERAL);
+  assert.equal(loaded.needsMigration, false);
+});
+
+test('legacy JSON storage remains readable and becomes formatted when saved', async () => {
+  const client = createFakeDiscord();
+  const legacy = { version: 1, dashboardChannelId: GENERAL, dashboardMessageId: null,
+    tokens: [{ chain: 'solana', address: SOL }] };
+  const id = '923456789012345678';
+  client.messages.set(PRIVATE, [{ id, content: serializeConfig(legacy) }]);
+  const store = await loadStore(client, GUILD);
+  assert.equal(store.needsMigration, true);
+  assert.equal(store.config.tokens.length, 1);
+  await saveStore(client, store);
+  const message = client.messages.get(PRIVATE)[0];
+  assert.equal(message.content, '');
+  assert.equal(message.embeds[0].fields[0].value, '**1 / 12**');
+  const reloaded = await loadStore(client, GUILD);
+  assert.equal(reloaded.needsMigration, false);
+  assert.deepEqual(reloaded.config.tokens, legacy.tokens);
+});
+
+test('storage conversion preserves previously tracked token when switching channels', async () => {
+  const client = createFakeDiscord();
+  const other = '623456789012345678';
+  const originalConfig = { version: 1, dashboardChannelId: GENERAL, dashboardMessageId: null,
+    tokens: [{ chain: 'solana', address: SOL }] };
+  client.channels.push({ id: other, type: 0, name: 'crypto-tracker-data',
+    topic: 'Private machine-readable watchlist for the Discord Crypto Tracker bot. Do not remove this channel.' });
+  client.messages.set(other, [{ id: '723456789012345678', content: serializeConfig(originalConfig) }]);
+  const result = await selectStorageChannel(client, { guildId: GUILD, targetId: PRIVATE,
+    fallbackDashboardChannelId: GENERAL });
+  assert.equal(result.tokens, 1);
+  const message = client.messages.get(PRIVATE)[0];
+  assert.equal(message.content, '');
+  const storage = await loadStore(client, GUILD);
+  assert.equal(storage.config.tokens.length, 1);
+  assert.equal(storage.config.tokens[0].address, SOL);
+});
+
+test('formatted storage embeds preserve configuration on save and through cleanup', async () => {
+  const client = createFakeDiscord();
+  const config = { version: 1, dashboardChannelId: GENERAL, dashboardMessageId: null,
+    tokens: [{ chain: 'solana', address: SOL }] };
+  const item = createStorageEmbed(config);
+  assert.ok(item.description.includes('||CRYPTO_TRACKER_CONFIG_V1'));
+  assert.match(item.fields[2].value, /solana/i);
+  await selectStorageChannel(client, { guildId: GUILD, targetId: PRIVATE, fallbackDashboardChannelId: GENERAL });
+  const result = await cleanupStores(client, GUILD);
+  assert.equal(result.kept, PRIVATE);
+  assert.deepEqual(result.removed, []);
 });

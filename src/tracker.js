@@ -8,15 +8,33 @@ const READ_HISTORY = 65536n;
 const MANAGE_CHANNELS = 16n;
 const EMBED_COLOR = 0x5865f2;
 
-export function parseConfig(content) {
-  if (!String(content).startsWith(CONFIG_MARKER)) return null;
-  try {
-    const data = JSON.parse(String(content).slice(CONFIG_MARKER.length));
-    if (data.version !== 1 || !Array.isArray(data.tokens) || data.tokens.length > MAX_TOKENS) return null;
-    if (!/^\d{16,22}$/.test(data.dashboardChannelId)) return null;
-    if (data.dashboardMessageId && !/^\d{16,22}$/.test(data.dashboardMessageId)) return null;
-    return data;
-  } catch { return null; }
+export function parseConfig(input) {
+  const sources = typeof input === "string" ? [input] : [
+    input?.content,
+    ...(Array.isArray(input?.embeds) ? input.embeds.map(embed => embed?.description) : []),
+  ];
+  for (const candidate of sources) {
+    const text = String(candidate ?? "");
+    let raw = text.startsWith(CONFIG_MARKER) ? text : null;
+    if (!raw) {
+      const start = text.indexOf("||" + CONFIG_MARKER);
+      if (start >= 0) {
+        const end = text.indexOf("||", start + 2);
+        if (end >= 0) raw = text.slice(start + 2, end);
+      }
+    }
+    if (!raw) continue;
+    try {
+      const data = JSON.parse(raw.slice(CONFIG_MARKER.length));
+      if (data.version !== 1 || !Array.isArray(data.tokens) || data.tokens.length > MAX_TOKENS) continue;
+      if (!/^\d{16,22}$/.test(data.dashboardChannelId)) continue;
+      if (data.dashboardMessageId && !/^\d{16,22}$/.test(data.dashboardMessageId)) continue;
+      return data;
+    } catch {
+      continue;
+    }
+  }
+  return null;
 }
 
 export function serializeConfig(config) {
@@ -28,6 +46,46 @@ export function serializeConfig(config) {
 const STORE_TOPIC = 'Private machine-readable watchlist for the Discord Crypto Tracker bot. Do not remove this channel.';
 const STORAGE_MARKER = '[SpicyTracker storage]';
 
+export function createStorageEmbed(config) {
+  const tokens = Array.isArray(config.tokens) ? config.tokens : [];
+  const listing = tokens.length
+    ? tokens.map((token, i) => {
+        const address = String(token.address ?? "");
+        const short = address.length > 22 ? `${address.slice(0, 8)}…${address.slice(-6)}` : address;
+        return `${i + 1}. **${safeText(token.chain, 16).toUpperCase()}** · \`${short}\``;
+      }).join("\n")
+    : "*No tokens are currently saved in this watchlist.*";
+  return {
+    title: "🔒 SpicyTracker · Private Storage",
+    color: 0x5865f2,
+    description: [
+      "This message stores your tracker settings. You can move this channel or restrict who can see it.",
+      "",
+      "**Internal configuration (click to reveal)**",
+      `||${serializeConfig(config)}||`,
+    ].join("\n"),
+    fields: [
+      { name: "Tracked tokens", value: `**${tokens.length} / ${MAX_TOKENS}**`, inline: true },
+      { name: "Price dashboard", value: `<#${config.dashboardChannelId}>`, inline: true },
+      { name: "Watchlist", value: listing.slice(0, 1024), inline: false },
+    ],
+    footer: { text: "Managed by SpicyTracker · Do not delete or edit this message" },
+  };
+}
+
+function isFormattedStorageMessage(message) {
+  return Array.isArray(message?.embeds) && message.embeds.some(embed =>
+    typeof embed?.description === "string" && embed.description.includes("||" + CONFIG_MARKER)
+  );
+}
+
+function hasConfigMarker(message) {
+  return String(message?.content ?? "").startsWith(CONFIG_MARKER)
+    || (Array.isArray(message?.embeds) && message.embeds.some(embed =>
+      String(embed?.description ?? "").includes(CONFIG_MARKER)
+    ));
+}
+
 async function inspectStores(client, guildId) {
   const channels = await client.request(`/guilds/${guildId}/channels`);
   if (!Array.isArray(channels)) throw new Error('Discord did not return server channels');
@@ -37,10 +95,10 @@ async function inspectStores(client, guildId) {
       const messages = await client.request(`/channels/${channel.id}/messages?limit=100`);
       if (!Array.isArray(messages)) throw new Error('Discord returned invalid configuration messages');
       const configs = messages.flatMap(message => {
-        const config = parseConfig(message.content);
-        return config ? [{ messageId: message.id, config }] : [];
+        const config = parseConfig(message);
+        return config ? [{ messageId: message.id, config, needsMigration: !isFormattedStorageMessage(message) }] : [];
       });
-      const invalidConfig = messages.some(m => String(m.content ?? '').startsWith(CONFIG_MARKER) && !parseConfig(m.content));
+      const invalidConfig = messages.some(m => hasConfigMarker(m) && !parseConfig(m));
       stores.push({ channel, messages, configs, invalidConfig });
     } catch (readError) {
       stores.push({ channel, readError, configs: [], invalidConfig: false, messages: [] });
@@ -54,6 +112,7 @@ function preferredStore(inspections) {
     configChannelId: item.channel.id,
     configMessageId: entry.messageId,
     config: entry.config,
+    needsMigration: entry.needsMigration,
   })));
   const topics = new Map(inspections.map(x => [x.channel.id, String(x.channel.topic || '')]));
   choices.sort((a, b) =>
@@ -80,8 +139,9 @@ export async function ensureStore(client, params) {
 
 export async function saveStore(client, store) {
   await client.request(`/channels/${store.configChannelId}/messages/${store.configMessageId}`, {
-    method: 'PATCH', body: { content: serializeConfig(store.config), allowed_mentions: { parse: [] } },
+    method: 'PATCH', body: { content: '', embeds: [createStorageEmbed(store.config)], allowed_mentions: { parse: [] } },
   });
+  store.needsMigration = false;
 }
 
 /**
@@ -127,11 +187,11 @@ export async function selectStorageChannel(client, { guildId, targetId, fallback
     throw error;
   }
   if (!Array.isArray(targetMessages)) throw new Error('Cannot read the selected storage channel.');
-  if (targetMessages.some(message => !parseConfig(message.content))) {
+  if (targetMessages.some(message => !parseConfig(message))) {
     throw new Error('Choose an empty dedicated data channel. This channel contains other messages.');
   }
   const targetConfigs = targetMessages.flatMap(message => {
-    const config = parseConfig(message.content);
+    const config = parseConfig(message);
     return config ? [{ messageId: message.id, config }] : [];
   });
   const configs = [...inspected.flatMap(x => x.configs), ...targetConfigs];
@@ -148,11 +208,11 @@ export async function selectStorageChannel(client, { guildId, targetId, fallback
     throw new Error('The private data channel cannot also be the public dashboard channel. Choose another text channel.');
   }
   const config = { ...base, tokens: [...tokenMap.values()] };
-  const existingMessage = targetMessages.find(message => parseConfig(message.content));
+  const existingMessage = targetMessages.find(message => parseConfig(message));
   const current = existingMessage ? { configChannelId: targetId, configMessageId: existingMessage.id, config } : null;
   if (current) await saveStore(client, current);
   else await client.request(`/channels/${targetId}/messages`, {
-    method: 'POST', body: { content: serializeConfig(config), allowed_mentions: { parse: [] } },
+    method: 'POST', body: { content: '', embeds: [createStorageEmbed(config)], allowed_mentions: { parse: [] } },
   });
   const newTopic = [String(target.topic || '').replace(STORAGE_MARKER, '').trim(), STORAGE_MARKER].filter(Boolean).join(' · ').slice(0, 1024);
   await client.request(`/channels/${targetId}`, { method: 'PATCH', body: { topic: newTopic } });
@@ -190,7 +250,7 @@ export async function cleanupStores(client, guildId) {
     if (item.channel.id === primary.configChannelId) continue;
     const botOwned = item.channel.topic === STORE_TOPIC || item.channel.topic === `${STORE_TOPIC} · ${STORAGE_MARKER}` || String(item.channel.topic || '').includes(STORAGE_MARKER);
     const onlyConfigMessages = !item.readError && !item.invalidConfig &&
-      item.messages.every(m => Boolean(parseConfig(m.content)));
+      item.messages.every(m => Boolean(parseConfig(m)));
     if (!botOwned || !onlyConfigMessages) {
       skipped.push(item.channel.id);
       continue;

@@ -1,5 +1,5 @@
 import { authorizedBearer, discordClient } from '../src/discord.js';
-import { loadStore, publishDashboard } from '../src/tracker.js';
+import { loadStore, publishDashboard, saveStore } from '../src/tracker.js';
 
 export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store');
@@ -10,6 +10,7 @@ export default async function handler(req, res) {
   try {
     const client = discordClient(process.env.DISCORD_BOT_TOKEN);
     const store = await loadStore(client, process.env.DISCORD_GUILD_ID);
+    if (store?.needsMigration) await saveStore(client, store);
     if (!store) return res.status(200).json({ ok: true, initialized: false, message: 'Use /tracker add or /tracker channel first' });
     if (!store.config.tokens.length) return res.status(200).json({ ok: true, initialized: true, tokens: 0, skipped: true });
     const published = await publishDashboard(client, store);

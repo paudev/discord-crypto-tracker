@@ -102,6 +102,8 @@ export async function executeTrackerCommand({ interaction, client, applicationId
 
   const store = await loadStore(client, guildId);
   if (!store) return 'No watchlist configured. Create a private text channel and run `/tracker storage target:#your-private-channel` to initialize storage.';
+  // Upgrade legacy raw JSON storage to a readable embed without posting to the price dashboard.
+  if (store.needsMigration) await saveStore(client, store);
   if (command.name === 'list') {
     if (!store.config.tokens.length) return `No tokens tracked yet. Dashboard: <#${store.config.dashboardChannelId}>.`;
     return `**Tracked tokens (${store.config.tokens.length}/${MAX_TOKENS}):**\n` + store.config.tokens
