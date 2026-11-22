@@ -45,8 +45,8 @@ test('higher sampled market cap sends notification to configured channel',async(
   assert.equal(f.posted.length,1);
   const body=f.posted[0];
   assert.deepEqual(body.allowed_mentions.parse,[]);
-  assert.match(body.embeds[0].description,/MC  \$1\.50K/);
-  assert.match(body.embeds[0].description,/Previous recorded MC  \*\*\$1\.00K\*\*/);
+  assert.match(body.embeds[0].description,/\$1\.50K/);
+  assert.match(body.embeds[0].description,/\$1\.00K/);
   assert.match(body.embeds[0].footer.text,/Not verified lifetime ATH/);
   assert.equal(body.embeds[0].timestamp,'2026-11-23T00:00:00.000Z');
   assert.equal(f.store.config.tokens[0].a,1500);
@@ -58,16 +58,28 @@ test('same or lower market caps never create duplicate high alerts',async()=>{
   await updateObservedHighs(f.client,f.store,sample(f.store,1150));
   assert.equal(f.posted.length,1);
 });
-test('minimum percent increase is measured against last alerted high',async()=>{
+test('minimum gain and 30-minute cooldown prevent repeating small highs',async()=>{
   const f=fixture({baseline:100,minPct:5});
-  await updateObservedHighs(f.client,f.store,sample(f.store,103));
+  const at=(iso)=>({now:()=>new Date(iso)});
+  await updateObservedHighs(f.client,f.store,sample(f.store,103),at('2026-11-23T00:00:00Z'));
   assert.equal(f.posted.length,0);
+  await updateObservedHighs(f.client,f.store,sample(f.store,106),at('2026-11-23T00:01:00Z'));
+  assert.equal(f.posted.length,1);
+  await updateObservedHighs(f.client,f.store,sample(f.store,112),at('2026-11-23T00:02:00Z'));
+  assert.equal(f.posted.length,1);
+  assert.equal(f.store.config.tokens[0].h,112);
+  assert.equal(f.store.config.tokens[0].a,106);
+  await updateObservedHighs(f.client,f.store,sample(f.store,113),at('2026-11-23T00:32:00Z'));
+  assert.equal(f.posted.length,2);
+  assert.equal(f.store.config.tokens[0].t,Math.floor(Date.parse('2026-11-23T00:32:00Z')/1000));
+});
+test('configured zero percent still enforces effective five-percent minimum',async()=>{
+  const f=fixture({baseline:100,minPct:0});
+  await updateObservedHighs(f.client,f.store,sample(f.store,104));
+  assert.equal(f.posted.length,0);
+  assert.equal(f.store.config.tokens[0].h,104);
   await updateObservedHighs(f.client,f.store,sample(f.store,106));
   assert.equal(f.posted.length,1);
-  await updateObservedHighs(f.client,f.store,sample(f.store,108));
-  assert.equal(f.posted.length,1);
-  await updateObservedHighs(f.client,f.store,sample(f.store,112));
-  assert.equal(f.posted.length,2);
 });
 test('disabled alerts track sampled highs without posting',async()=>{
   const f=fixture({baseline:100,athEnabled:false});
@@ -114,9 +126,9 @@ test('ATH preview and real notification produce the EXACT same Discord embed',()
   const live=createHighAlertEmbed(token,pair,previous,current,clock);
   const simulation=createHighAlertEmbed(token,pair,previous,current,clock);
   assert.deepEqual(simulation,live);
-  assert.equal(live.title,'New observed market-cap high');
+  assert.equal(live.title,'New market-cap high');
   assert.equal(live.color,0x22c55e);
-  assert.match(live.description,/MC  \$125\.00K/);
+  assert.match(live.description,/\$125\.00K/);
   assert.match(live.description,/\+25\.00%/);
   assert.match(live.footer.text,/Not verified lifetime ATH/);
   assert.doesNotMatch(JSON.stringify(live),/PREVIEW|TEST ONLY|Simulated|No changes saved/i);
@@ -124,18 +136,22 @@ test('ATH preview and real notification produce the EXACT same Discord embed',()
   assert.equal(token.a,120000);
 });
 
-test('dashboard separators are inline with each token heading, without spacer rows',()=>{
+test('dashboard headings stay separate from compact dividers; ANSI has green gains and red losses',()=>{
   const tokenA={chain:'solana',address:SOL,symbol:'DREAD'};
   const tokenB={chain:'base',address:'0x'+'a'.repeat(40),symbol:'MOON'};
-  const entries=[{token:tokenA,pair:{baseToken:{symbol:'DREAD'},marketCap:120000,priceUsd:0.004,liquidity:{usd:5000},priceChange:{h24:8,m5:-2}}},
-    {token:tokenB,pair:{baseToken:{symbol:'MOON'},marketCap:32000,priceUsd:0.006,liquidity:{usd:4000},priceChange:{h24:-3,m5:1}}}];
-  const card=createDashboardEmbeds(entries)[0];
-  assert.match(card.description,/^──── \*\*DREAD\*\* · SOLANA/m);
-  assert.match(card.description,/^──── \*\*MOON\*\* · BASE/m);
-  assert.doesNotMatch(card.description,/^[-─━]{3,}$/m);
-  assert.doesNotMatch(card.description,/\n\n/);
-  assert.match(card.description,/🟩 \+8\.00%/);
-  assert.match(card.description,/🟥 -2\.00%/);
+  const entries=[{token:tokenA,pair:{baseToken:{symbol:'DREAD'},marketCap:120000,priceUsd:0.004,
+    liquidity:{usd:5000},priceChange:{h24:8,m5:-2}}},
+    {token:tokenB,pair:{baseToken:{symbol:'MOON'},marketCap:32000,priceUsd:0.006,
+    liquidity:{usd:4000},priceChange:{h24:-3,m5:1}}}];
+  const description=createDashboardEmbeds(entries)[0].description;
+  assert.match(description,/^\*\*DREAD\*\* · SOLANA/m);
+  assert.match(description,/^\*\*MOON\*\* · BASE/m);
+  assert.match(description,/\n────────────\n\*\*MOON\*\*/);
+  assert.doesNotMatch(description,/──── \*\*DREAD/);
+  assert.doesNotMatch(description,/\n\n/);
+  assert.match(description,/`{3}ansi/);
+  assert.match(description,/\x1b\[1;32m↑ \+8\.00%/);
+  assert.match(description,/\x1b\[1;31m↓ -2\.00%/);
 });
 
 test('ATH preview posts and displays the exact live alert embed, with no preview-only text',async()=>{
@@ -167,7 +183,9 @@ test('ATH preview posts and displays the exact live alert embed, with no preview
   assert.deepEqual(response,{embeds:posted[0].embeds});
   assert.deepEqual(posted[0].allowed_mentions,{parse:[]});
   assert.doesNotMatch(JSON.stringify(response),/preview|test only|simulated|no changes saved/i);
-  const exactLive=createHighAlertEmbed(token,pairs[0],100000,125000,new Date(response.embeds[0].timestamp));
+  const hypotheticalPair={...pairs[0],marketCap:156250,priceUsd:0.005};
+  const exactLive=createHighAlertEmbed(token,hypotheticalPair,125000,156250,new Date(response.embeds[0].timestamp));
+  assert.match(response.embeds[0].description,/\$156\.25K/);
   assert.deepEqual(response.embeds[0],exactLive);
   assert.equal(cfg.tokens[0].h,100000);
   assert.equal(cfg.tokens[0].a,100000);
@@ -178,4 +196,44 @@ test('ATH preview posts and displays the exact live alert embed, with no preview
   assert.deepEqual(patchBody.embeds,posted[0].embeds);
   assert.equal(patchBody.content,'');
   assert.deepEqual(patchBody.allowed_mentions,{parse:[]});
+});
+
+test('manually recorded $48.7K ATH blocks false new-high alerts until a meaningful breakout',async()=>{
+  const f=fixture({baseline:31000,minPct:0});
+  f.store.config.tokens[0].b=48700;
+  await updateObservedHighs(f.client,f.store,sample(f.store,40000),{now:()=>new Date('2026-11-23T00:00:00Z')});
+  assert.equal(f.posted.length,0);
+  await updateObservedHighs(f.client,f.store,sample(f.store,49000),{now:()=>new Date('2026-11-23T00:01:00Z')});
+  assert.equal(f.posted.length,0);
+  await updateObservedHighs(f.client,f.store,sample(f.store,52000),{now:()=>new Date('2026-11-23T00:02:00Z')});
+  assert.equal(f.posted.length,1);
+  assert.match(f.posted[0].embeds[0].description,/\$48\.70K/);
+  assert.match(f.posted[0].embeds[0].description,/\$52\.00K/);
+  assert.match(f.posted[0].embeds[0].footer.text,/manually recorded/i);
+});
+test('DREAD simulation uses historical $48.7K, not current $31K, without mutating records',async()=>{
+  const guild='923456789012345678';
+  const token={chain:'solana',address:SOL,symbol:'DREAD',h:31000,a:31000,b:48700};
+  const cfg={version:1,dashboardChannelId:DASH,athChannelId:ALERT,tokens:[token]};
+  const posted=[];
+  const client={async request(path,opts={}){
+    if(path==='/guilds/'+guild+'/channels')return [{id:STORE,name:'crypto-tracker-data',type:0},{id:ALERT,type:0}];
+    if(path==='/channels/'+STORE+'/messages?limit=100')return [{id:MSG,embeds:[createStorageEmbed(cfg)]}];
+    if(path==='/channels/'+ALERT+'/messages'&&opts.method==='POST'){posted.push(opts.body);return {id:'999456789012345678'};}
+    throw Error('Unexpected Discord call '+path);
+  }};
+  const response=await executeTrackerCommand({
+    interaction:{guild_id:guild,channel_id:DASH,member:{permissions:'32'},
+      data:{options:[{name:'ath-preview',options:[{name:'increase',value:15}]}]}},
+    client,fetcher:async()=>({ok:true,json:async()=>[
+      {chainId:'solana',baseToken:{address:SOL,symbol:'DREAD'},marketCap:31000,
+       priceUsd:'0.000035',liquidity:{usd:11970}}
+    ]}),
+  });
+  assert.deepEqual(response.embeds,posted[0].embeds);
+  assert.match(response.embeds[0].description,/\$48\.70K/);
+  assert.match(response.embeds[0].description,/\$56\.01K/);
+  assert.match(response.embeds[0].description,/\+15\.00%/);
+  assert.equal(token.h,31000);
+  assert.equal(token.b,48700);
 });
