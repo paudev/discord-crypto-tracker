@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { cleanupStores, createStorageEmbed, loadStore, publishDashboard, saveStore, selectStorageChannel, serializeConfig } from '../src/tracker.js';
-import { executeTrackerCommand } from '../src/commands.js';
+import { executeTrackerCommand, syncTrackerCommandsIfNeeded } from '../src/commands.js';
 
 const GUILD = '123456789012345678';
 const APP = '223456789012345678';
@@ -442,4 +442,38 @@ test('ATH preview rejects unknown contracts and private storage as a target',asy
   const privateChannel=await executeTrackerCommand({interaction:interaction('ath-preview',[opt('target',PRIVATE)]),client,applicationId:APP,fetcher:live});
   assert.match(privateChannel,/private storage channel/);
   assert.equal(client.messages.get(GENERAL).length,1);
+});
+
+
+test('authenticated refresh registers the ATH preview slash command once and remembers schema revision',async()=>{
+  const client=createFakeDiscord();
+  await selectStorageChannel(client,{guildId:GUILD,targetId:PRIVATE,fallbackDashboardChannelId:GENERAL});
+  let puts=0;
+  const original=client.request.bind(client);
+  client.request=async(path,opts={})=>{
+    if(path==='/applications/'+APP+'/guilds/'+GUILD+'/commands' && opts.method==='PUT'){
+      puts++;
+      const command=opts.body[0];
+      assert.equal(command.name,'tracker');
+      assert.ok(command.options.some(x=>x.name==='ath-preview'));
+      return [{name:'tracker'}];
+    }
+    return original(path,opts);
+  };
+  const store=await loadStore(client,GUILD);
+  assert.equal(await syncTrackerCommandsIfNeeded(client,store,APP,GUILD),true);
+  assert.equal(puts,1);
+  assert.equal((await loadStore(client,GUILD)).config.cv,2);
+  assert.equal(await syncTrackerCommandsIfNeeded(client,store,APP,GUILD),false);
+  assert.equal(puts,1);
+});
+
+test('command sync skips missing Discord application ID and does not alter storage',async()=>{
+  const client=createFakeDiscord();
+  await selectStorageChannel(client,{guildId:GUILD,targetId:PRIVATE,fallbackDashboardChannelId:GENERAL});
+  const store=await loadStore(client,GUILD);
+  const before=JSON.stringify(store.config);
+  assert.equal(await syncTrackerCommandsIfNeeded(client,store,null,GUILD),false);
+  assert.equal(JSON.stringify(store.config),before);
+  assert.equal(client.log.filter(x=>x.method==='PUT').length,0);
 });

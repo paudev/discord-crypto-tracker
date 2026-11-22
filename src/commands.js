@@ -46,6 +46,27 @@ export const TRACKER_COMMAND = {
   ],
 };
 
+
+const REGISTERED_COMMAND_REVISION = 2;
+
+/** Register newly added slash commands once from the existing authenticated refresh. */
+export async function syncTrackerCommandsIfNeeded(client, store, applicationId, guildId) {
+  if (store.config.cv === REGISTERED_COMMAND_REVISION) return false;
+  if (!/^\d{16,22}$/.test(String(applicationId ?? '')) ||
+      !/^\d{16,22}$/.test(String(guildId ?? ''))) return false;
+  await client.request('/applications/' + applicationId + '/guilds/' + guildId + '/commands', {
+    method: 'PUT', body: [TRACKER_COMMAND],
+  });
+  store.config.cv = REGISTERED_COMMAND_REVISION;
+  try {
+    await saveStore(client, store);
+  } catch (error) {
+    delete store.config.cv;
+    throw error;
+  }
+  return true;
+}
+
 export function isServerManager(interaction) {
   if (!interaction.guild_id) return false;
   try {

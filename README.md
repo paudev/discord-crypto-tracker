@@ -160,7 +160,7 @@ The bot can send a **new message** to a server-manager-selected text channel whe
 
 Alerts default to **off** until you choose a destination. The **first valid market-cap sample** for existing/legacy tokens establishes a baseline silently. When adding a new token, the live market cap is used as its baseline if present. The one-minute Cloudflare refresh records new highs in the private Discord storage message and posts alerts to the configured destination with bot View Channel, Send Messages and Embed Links permissions. Existing dashboard publishing still edits the same dashboard message. Failed alert deliveries are retried on a later sample without crashing dashboard updates. The saved internal keys `h` and `a` represent sampled high and last-notified high to remain within Discord's storage-message length limit for 12 tokens.
 
-New and changed slash commands require **one re-registration** using the existing authenticated `POST /api/register` endpoint after deployment. `/tracker ath-preview` is restricted to server managers just like the other tracker commands. No new GitHub Actions or Cloudflare Worker is required.
+The existing authenticated one-minute `POST /api/refresh` call **automatically registers new slash commands once** when their saved command schema revision is outdated. It then stores the compact `cv: 2` revision flag in private Discord configuration so future ticks skip registration. Registration failures are logged and retried without breaking the price dashboard. The existing authenticated `POST /api/register` endpoint remains available as a manual fallback. `/tracker ath-preview` is restricted to server managers like the other commands. No new GitHub Actions or Cloudflare Worker is required.
 
 ## Dashboard design contract
 

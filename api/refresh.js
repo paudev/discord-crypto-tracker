@@ -1,5 +1,6 @@
 import { authorizedBearer, discordClient } from '../src/discord.js';
 import { loadStore, publishDashboard, saveStore } from '../src/tracker.js';
+import { syncTrackerCommandsIfNeeded } from '../src/commands.js';
 
 export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store');
@@ -12,6 +13,16 @@ export default async function handler(req, res) {
     const store = await loadStore(client, process.env.DISCORD_GUILD_ID);
     if (store?.needsMigration) await saveStore(client, store);
     if (!store) return res.status(200).json({ ok: true, initialized: false, message: 'Use /tracker add or /tracker channel first' });
+    // The authenticated minute refresh auto-registers new Discord slash commands
+    // exactly once per stored schema revision; failures must not block prices.
+    try {
+      const registered = await syncTrackerCommandsIfNeeded(
+        client, store, process.env.DISCORD_APPLICATION_ID, process.env.DISCORD_GUILD_ID,
+      );
+      if (registered) console.log('[crypto:commands] Updated guild slash commands');
+    } catch (error) {
+      console.warn('[crypto:commands] Auto-registration failed; refresh will retry', error.message);
+    }
     if (!store.config.tokens.length) return res.status(200).json({ ok: true, initialized: true, tokens: 0, skipped: true });
     const published = await publishDashboard(client, store);
     return res.status(200).json({ ok: true, initialized: true, ...published });
