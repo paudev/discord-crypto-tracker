@@ -7,7 +7,7 @@ A standalone, **free API** Discord price dashboard with **slash commands**. Verc
 - Supports Solana and EVM networks: Solana, Ethereum, Base, BSC, Arbitrum, Polygon, Avalanche, Ronin (where supported by DEX Screener).
 - Uses the public [DEX Screener API](https://docs.dexscreener.com/api/reference); **no API key required**. Looks up pools by token contract address and chooses the **highest USD-liquidity pool where that token is the base asset**, to avoid showing the quote token's price by mistake.
 - Price, 5-minute and 24-hour price change, market cap (or separately labeled FDV), liquidity, contract address, DEX Screener chart link.
-- Up to 12 dynamically tracked tokens in **one continually edited Discord message containing one embed**. Use a saturated, stable **Discord blurple accent (`#5865F2`)** for the card border (never red/green as a misleading overall market signal), and **🟩 ▲ gain / 🟥 ▼ loss / ➖ flat** solely as *price-action* indicators for 24h and 5m. No token-specific emojis or arbitrary icon selection; token symbols and chain names come from DEX Screener or saved configuration. MC is bold and on one line, followed by an airy change row and price/liquidity row; a shortened contract, clickable DEX chart, plus **opening, between-token, and closing** subtle dividers all remain. No ASCII box frames, separate token embeds, new channels, or GitHub Actions.
+- Up to 12 dynamically tracked tokens in **one cohesive Discord embed, updated in one existing message**. The dashboard uses a consistent blurple (`#5865F2`) accent, meaningful spacing and slim top/between/bottom separators, with **market cap prominent**, 24h and 5m movements indicated by **🟩 ▲ / 🟥 ▼ / ➖**, price, liquidity, a shortened contract and a clickable chart link. Labels come from DEX Screener or saved metadata. No token-specific emojis, stacked cards, ASCII frames, duplicate messages, extra channels or GitHub Actions.
 - `/tracker add chain:solana address:<token-CA>` — add a token. On first use, the dashboard appears in the channel where you run the command.
 - `/tracker remove address:<token-CA>` — remove a token (optionally select network if duplicated).
 - `/tracker list` — show tracked chains, contracts and the dashboard channel.
@@ -153,11 +153,14 @@ The bot can send a **new message** to a server-manager-selected text channel whe
 - `/tracker ath-channel target:#market-cap-alerts` enables notifications. Set `min-increase` optionally (0–100%); omitted = 0, which reports **each** newly recorded high.
 - `/tracker ath-channel target:#market-cap-alerts min-increase:5` suppresses small records until market cap is at least 5% above the last notified high. Alerts can still be frequent if the market rises quickly.
 - `/tracker ath-status` shows the destination, threshold, and each tracked token's observed high.
+- `/tracker ath-preview` posts **one simulated alert** using the first tracked token, the latest DEX Screener market cap, and a fictional previous high 15% lower. It defaults to the configured ATH channel or the channel where you run the command. It works even if real ATH alerts are disabled.
+- `/tracker ath-preview token:DREAD increase:20` previews a specific tracked symbol with a simulated 20% increase. You can also supply a tracked contract address in `token` and optionally choose a `target` text channel. If multiple tokens share a symbol, use the contract.
+- Preview messages are visibly labeled **PREVIEW / TEST ONLY** and **never update** stored highs, dashboard messages or notification settings.
 - `/tracker ath-off` disables new alerts but preserves recorded highs.
 
 Alerts default to **off** until you choose a destination. The **first valid market-cap sample** for existing/legacy tokens establishes a baseline silently. When adding a new token, the live market cap is used as its baseline if present. The one-minute Cloudflare refresh records new highs in the private Discord storage message and posts alerts to the configured destination with bot View Channel, Send Messages and Embed Links permissions. Existing dashboard publishing still edits the same dashboard message. Failed alert deliveries are retried on a later sample without crashing dashboard updates. The saved internal keys `h` and `a` represent sampled high and last-notified high to remain within Discord's storage-message length limit for 12 tokens.
 
-New slash commands require **one re-registration** using the existing authenticated `POST /api/register` endpoint after deployment. No new GitHub Actions or Cloudflare Worker is required.
+New and changed slash commands require **one re-registration** using the existing authenticated `POST /api/register` endpoint after deployment. `/tracker ath-preview` is restricted to server managers just like the other tracker commands. No new GitHub Actions or Cloudflare Worker is required.
 
 ## Dashboard design contract
 
@@ -166,3 +169,7 @@ Preserve all requirements together: one edited Discord message and one embed, dy
 ### Price indicator contract
 
 For **both 24h and 5m**: increases use **🟩 ▲** (green square and up triangle), decreases use **🟥 ▼** (red square and down triangle), exact zero uses **➖**, and missing data is **—**. This is data-driven, never tied to the token's name. The overall dashboard border stays blurple because multiple tokens may move in different directions. Discord native embeds do not support true per-character font colors.
+
+## Preview security and permissions
+
+The ATH preview only fetches the selected token's live current pair and market cap to construct a **simulated** high. It posts a labeled test embed with Discord `allowed_mentions.parse=[]`, does not update `h`/`a`, and never changes the normal dashboard. Its destination must be an existing guild text channel (not private storage), and SpicyTracker needs View Channel, Send Messages and Embed Links permissions. If no target is supplied, it uses the configured ATH channel, otherwise the calling channel. The simulated percentage defaults to 15% and accepts values from 1 to 100%.

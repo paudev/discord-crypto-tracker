@@ -329,32 +329,43 @@ function priceAction(value){
  return "➖ "+formatChange(n);
 }
 
-export function createDashboardEmbeds(entries,clock=new Date()){
- const sections=entries.map(({token,pair,error})=>{
-  const symbol=safeText(pair?.baseToken?.symbol||token.symbol||token.name,24)||"Unknown token";
-  const chain=safeText(token.chain,16).toUpperCase();
-  const chart=dexChartUrl(pair);
-  const header="**"+symbol+"**  ·  "+chain+(chart?"  ·  [Chart ↗]("+chart+")":"");
-  const ca="CA `"+shortAddress(token.address)+"`";
-  if(!pair)return [header,"","*Market data unavailable"+(error?" · API error":" · No priced pool")+"*",ca].join("\n");
-  return [
-   header,
-   "",
-   "**"+marketCapText(pair)+"**",
-   "24h **"+priceAction(pair.priceChange?.h24)+"**  ·  5m **"+priceAction(pair.priceChange?.m5)+"**",
-   "Price **"+formatPrice(pair.priceUsd)+"**  ·  Liq **"+formatCompact(pair.liquidity?.usd,{usd:true})+"**",
-   ca,
-  ].join("\n");
- });
- const divider="────────────────────";
- const intro=entries.length+" token"+(entries.length===1?"":"s")+" tracked  ·  Live DEX prices";
- return [{
-  title:"SpicyTracker · Crypto Markets",
-  description:sections.length?intro+"\n\n"+divider+"\n\n"+sections.join("\n\n"+divider+"\n\n")+"\n\n"+divider:"No tracked tokens. Use `/tracker add` to get started.",
-  color:0x5865f2,
-  footer:{text:"DEX Screener · Indicative prices · Refresh ~1 min"},
-  timestamp:clock.toISOString(),
- }];
+export function createDashboardEmbeds(entries, clock = new Date()) {
+  // Discord embeds have one accent color, so market moves use small,
+  // data-driven green/red markers. No token-specific icons or extra cards.
+  const sections = entries.map(({ token, pair, error }) => {
+    const symbol = safeText(pair?.baseToken?.symbol || token.symbol || token.name, 24) || 'Unknown token';
+    const chain = safeText(token.chain, 16).toUpperCase();
+    const chart = dexChartUrl(pair);
+    const header = '**' + symbol + '**  ·  `' + chain + '`' +
+      (chart ? '  ·  [Chart ↗](' + chart + ')' : '');
+    const ca = 'CA `' + shortAddress(token.address) + '`';
+    if (!pair) return [
+      header,
+      '',
+      '*Market data unavailable' + (error ? ' · API error' : ' · No priced pool') + '*',
+      ca,
+    ].join('\n');
+    return [
+      header,
+      '',
+      '**' + marketCapText(pair) + '**',
+      '24h **' + priceAction(pair.priceChange?.h24) + '**  ·  5m **' + priceAction(pair.priceChange?.m5) + '**',
+      'Price **' + formatPrice(pair.priceUsd) + '**  ·  Liquidity **' + formatCompact(pair.liquidity?.usd, { usd: true }) + '**',
+      ca,
+    ].join('\n');
+  });
+  const divider = '────────────────────';
+  const count = entries.length;
+  const intro = '**' + count + ' tracked token' + (count === 1 ? '' : 's') + '**  ·  Auto-refresh ~1 min';
+  return [{
+    title: 'SpicyTracker  /  Market Watch',
+    description: sections.length
+      ? intro + '\n\n' + divider + '\n\n' + sections.join('\n\n' + divider + '\n\n') + '\n\n' + divider
+      : 'No tracked tokens. Use `/tracker add` to begin.',
+    color: 0x5865f2,
+    footer: { text: 'DEX Screener  ·  Indicative market data' },
+    timestamp: clock.toISOString(),
+  }];
 }
 
 function dashboardMessageContent(){return "";}
@@ -378,23 +389,31 @@ function observedMarketCap(pair) {
   const mc = Number(pair.marketCap);
   return Number.isFinite(mc) && mc > 0 ? mc : null;
 }
-function createHighAlertEmbed(token, pair, previous, current, clock = new Date()) {
+export function createHighAlertEmbed(token, pair, previous, current, clock = new Date(), { preview = false } = {}) {
   const symbol = safeText(pair?.baseToken?.symbol || token.symbol, 24) || 'Unknown token';
   const chain = safeText(token.chain, 16).toUpperCase();
-  const growth = (current / previous - 1) * 100;
+  const gain = (current / previous - 1) * 100;
   const chart = dexChartUrl(pair);
+  const title = preview ? 'PREVIEW  ·  New observed MC high' : 'New observed market-cap high';
   return {
-    title: '🟩 ▲ New observed market-cap high',
+    title,
     description: [
-      '**' + symbol + '** · ' + chain,
+      '**' + symbol + '**  ·  `' + chain + '`',
       '',
-      '**MC ' + formatCompact(current, { usd: true }) + '**  ·  🟩 ▲ +' + growth.toFixed(2) + '%',
-      'Previous recorded high: **' + formatCompact(previous, { usd: true }) + '**',
-      'Price ' + formatPrice(pair?.priceUsd) + (chart ? '  ·  [View chart ↗](' + chart + ')' : ''),
-      'CA ' + String.fromCharCode(96) + shortAddress(token.address) + String.fromCharCode(96),
+      '**MC  ' + formatCompact(current, { usd: true }) + '**',
+      '🟩 ▲ **+' + gain.toFixed(2) + '%**  vs. previous high',
+      '',
+      'Previous recorded MC  **' + formatCompact(previous, { usd: true }) + '**',
+      'Price  **' + formatPrice(pair?.priceUsd) + '**' + (chart ? '  ·  [Chart ↗](' + chart + ')' : ''),
+      'CA `' + shortAddress(token.address) + '`',
+      ...(preview ? ['', '**TEST ONLY**  ·  No market-cap records were modified'] : []),
     ].join('\n'),
-    color: 0x22c55e,
-    footer: { text: 'Highest observed since tracking began · Not verified lifetime ATH · DEX Screener' },
+    color: preview ? 0x5865f2 : 0x22c55e,
+    footer: {
+      text: preview
+        ? 'PREVIEW ONLY · Simulated MC record · No changes saved'
+        : 'Highest observed since tracking began · Not verified lifetime ATH · DEX Screener',
+    },
     timestamp: clock.toISOString(),
   };
 }

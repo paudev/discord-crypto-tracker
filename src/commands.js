@@ -1,6 +1,6 @@
 import { CHAIN_CHOICES, MAX_TOKENS, safeText } from './discord.js';
 import { normalizeToken, fetchTokenPair } from './dexscreener.js';
-import { cleanupStores, hydrateTokenSymbols, loadStore, publishDashboard, saveStore, selectStorageChannel } from './tracker.js';
+import { cleanupStores, createHighAlertEmbed, hydrateTokenSymbols, loadStore, publishDashboard, saveStore, selectStorageChannel } from './tracker.js';
 
 const STRING = 3;
 const CHANNEL = 7;
@@ -36,6 +36,11 @@ export const TRACKER_COMMAND = {
     ] },
     { type: SUBCOMMAND, name: 'ath-off', description: 'Disable observed market-cap alerts' },
     { type: SUBCOMMAND, name: 'ath-status', description: 'Show observed market-cap highs and alert channel' },
+    { type: SUBCOMMAND, name: 'ath-preview', description: 'Post a simulated record-high alert without changing tracked records', options: [
+      { type: STRING, name: 'token', description: 'Tracked token symbol or contract (defaults to first token)', required: false },
+      { type: CHANNEL, name: 'target', description: 'Preview destination (defaults to ATH channel or current channel)', required: false, channel_types: [0] },
+      { type: NUMBER, name: 'increase', description: 'Simulated percentage gain (default 15)', required: false, min_value: 1, max_value: 100 },
+    ] },
     { type: SUBCOMMAND, name: 'cleanup', description: 'Safely remove redundant bot-created data channels' },
     { type: SUBCOMMAND, name: 'help', description: 'Show tracker commands and setup instructions' },
   ],
@@ -57,6 +62,7 @@ const helpText = [
   '• `/tracker refresh` — fetch the latest prices now',
   '• `/tracker ath-channel target:#ath-alerts` — alert for new observed MC highs (optional min-increase)',
   '• `/tracker ath-status` — show observed highs and settings',
+  '• `/tracker ath-preview` — post a clearly labeled example alert without changing ATH records',
   '• `/tracker ath-off` — disable alerts',
   '• `/tracker channel target:#crypto-prices` — move the public dashboard',
   '• `/tracker storage target:#my-private-channel` — choose the private storage channel; set roles/categories in Discord',
@@ -152,6 +158,55 @@ export async function executeTrackerCommand({ interaction, client, applicationId
       '\nMinimum increase: ' + (store.config.athMinPct ?? 0) + '%' +
       '\n' + (lines.join('\n') || 'No tracked tokens') +
       '\nHighs are sampled since tracking began; not verified lifetime ATHs.';
+  }
+
+
+  if (command.name === 'ath-preview') {
+    const search = String(optionValue(command, 'token') || '').trim().toLowerCase();
+    const targetId = optionValue(command, 'target') || store.config.athChannelId || interaction.channel_id;
+    const rawIncrease = optionValue(command, 'increase');
+    const increase = rawIncrease == null ? 15 : Number(rawIncrease);
+    if (!Number.isFinite(increase) || increase < 1 || increase > 100) return 'Preview increase must be between 1% and 100%.';
+    if (!/^\d{16,22}$/.test(String(targetId ?? ''))) return 'Choose a valid text channel.';
+    if (targetId === store.configChannelId) return 'Preview alerts cannot be sent to the private storage channel.';
+    const channels = await client.request('/guilds/' + guildId + '/channels');
+    if (!Array.isArray(channels) || !channels.some(c => c.id === targetId && c.type === 0)) {
+      return 'Choose an existing text channel in this server.';
+    }
+    if (!store.config.tokens.length) return 'Track a token first with /tracker add.';
+    const matches = search
+      ? store.config.tokens.filter(t =>
+          String(t.address).toLowerCase() === search || String(t.symbol || '').toLowerCase() === search)
+      : [store.config.tokens[0]];
+    if (!matches.length) return 'No matching tracked token. Provide a symbol or contract address from /tracker list.';
+    if (matches.length > 1) return 'Multiple tracked tokens share that symbol. Specify the contract address.';
+    const token = matches[0];
+    let pair;
+    try {
+      pair = await fetchTokenPair(token, fetcher);
+    } catch (error) {
+      console.error('[tracker:ath-preview] Live price lookup failed', error.message);
+      return 'Unable to load a live price for the preview right now. Try again shortly.';
+    }
+    const current = pair?.marketCap == null ? null : Number(pair.marketCap);
+    if (!Number.isFinite(current) || current <= 0) {
+      return 'A live market cap is unavailable for that token. Try another tracked token.';
+    }
+    const previous = current / (1 + increase / 100);
+    const embed = createHighAlertEmbed(token, pair, previous, current, new Date(), { preview: true });
+    try {
+      await client.request('/channels/' + targetId + '/messages', {
+        method: 'POST',
+        body: { embeds: [embed], allowed_mentions: { parse: [] } },
+      });
+    } catch (error) {
+      console.error('[tracker:ath-preview] Failed to send simulated alert', error.message);
+      return 'Could not send the preview. Give SpicyTracker View Channel, Send Messages and Embed Links in the selected channel.';
+    }
+    return 'Preview sent to <#' + targetId + '> for **' +
+      (safeText(pair.baseToken?.symbol || token.symbol, 24) || 'token') +
+      '** with a simulated +' + increase.toFixed(2) +
+      '% gain. This was only a test; no recorded highs or alert settings changed.';
   }
 
   if (command.name === 'list') {

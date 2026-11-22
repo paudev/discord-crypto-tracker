@@ -382,3 +382,64 @@ test('adding a token with market cap seeds observed baseline without instant ale
   assert.equal(token.h,123456);
   assert.equal(token.a,123456);
 });
+
+
+test('ATH preview posts one clearly marked test to selected alert channel without updating highs',async()=>{
+  const client=createFakeDiscord();
+  const ALERTS='623456789012345678';
+  client.channels.push({id:ALERTS,type:0,name:'ath-alerts'});
+  const live=()=>({ok:true,json:async()=>[{
+    chainId:'solana',baseToken:{address:SOL,symbol:'DREAD'},
+    priceUsd:'0.000034',marketCap:150000,liquidity:{usd:12000},
+    url:'https://dexscreener.com/solana/dread'
+  }]});
+  await executeTrackerCommand({interaction:interaction('storage',[opt('target',PRIVATE)]),client,applicationId:APP});
+  await executeTrackerCommand({interaction:interaction('add',[opt('chain','solana'),opt('address',SOL)]),client,applicationId:APP,fetcher:live});
+  await executeTrackerCommand({interaction:interaction('ath-channel',[opt('target',ALERTS)]),client,applicationId:APP});
+  const before=JSON.stringify((await loadStore(client,GUILD)).config);
+  const reply=await executeTrackerCommand({interaction:interaction('ath-preview',[
+    opt('token','DREAD'),opt('increase',20)
+  ]),client,applicationId:APP,fetcher:live});
+  assert.match(reply,/Preview sent/);
+  assert.match(reply,/simulated \+20\.00%/);
+  const preview=client.messages.get(ALERTS);
+  assert.equal(preview.length,1);
+  assert.match(preview[0].embeds[0].title,/PREVIEW/);
+  assert.match(preview[0].embeds[0].description,/TEST ONLY/);
+  assert.match(preview[0].embeds[0].description,/\+20\.00%/);
+  assert.deepEqual(preview[0].allowed_mentions.parse,[]);
+  assert.equal(JSON.stringify((await loadStore(client,GUILD)).config),before);
+  assert.equal(client.messages.get(GENERAL).length,1);
+});
+
+test('ATH preview works without alert setup in command channel and supports contract selection',async()=>{
+  const client=createFakeDiscord();
+  const live=()=>({ok:true,json:async()=>[{
+    chainId:'solana',baseToken:{address:SOL,symbol:'DREAD'},priceUsd:'0.01',
+    marketCap:50000,liquidity:{usd:12000}
+  }]});
+  await executeTrackerCommand({interaction:interaction('storage',[opt('target',PRIVATE)]),client,applicationId:APP});
+  await executeTrackerCommand({interaction:interaction('add',[opt('chain','solana'),opt('address',SOL)]),client,applicationId:APP,fetcher:live});
+  const before=client.messages.get(GENERAL).length;
+  const reply=await executeTrackerCommand({interaction:interaction('ath-preview',[
+    opt('token',SOL)
+  ]),client,applicationId:APP,fetcher:live});
+  assert.match(reply,/Preview sent/);
+  assert.equal(client.messages.get(GENERAL).length,before+1);
+  assert.match(client.messages.get(GENERAL)[0].embeds[0].footer.text,/PREVIEW ONLY/);
+  assert.equal((await loadStore(client,GUILD)).config.athChannelId,undefined);
+});
+
+test('ATH preview rejects unknown contracts and private storage as a target',async()=>{
+  const client=createFakeDiscord();
+  const live=()=>({ok:true,json:async()=>[{
+    chainId:'solana',baseToken:{address:SOL,symbol:'DREAD'},priceUsd:'0.01',marketCap:50000
+  }]});
+  await executeTrackerCommand({interaction:interaction('storage',[opt('target',PRIVATE)]),client,applicationId:APP});
+  await executeTrackerCommand({interaction:interaction('add',[opt('chain','solana'),opt('address',SOL)]),client,applicationId:APP,fetcher:live});
+  const unknown=await executeTrackerCommand({interaction:interaction('ath-preview',[opt('token','FAKE')]),client,applicationId:APP,fetcher:live});
+  assert.match(unknown,/No matching tracked token/);
+  const privateChannel=await executeTrackerCommand({interaction:interaction('ath-preview',[opt('target',PRIVATE)]),client,applicationId:APP,fetcher:live});
+  assert.match(privateChannel,/private storage channel/);
+  assert.equal(client.messages.get(GENERAL).length,1);
+});
