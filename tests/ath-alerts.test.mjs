@@ -136,22 +136,44 @@ test('ATH preview and real notification produce the EXACT same Discord embed',()
   assert.equal(token.a,120000);
 });
 
-test('dashboard headings stay separate from compact dividers; ANSI has green gains and red losses',()=>{
+test('native embed fields clearly group tokens without lines and code blocks',()=>{
   const tokenA={chain:'solana',address:SOL,symbol:'DREAD'};
   const tokenB={chain:'base',address:'0x'+'a'.repeat(40),symbol:'MOON'};
-  const entries=[{token:tokenA,pair:{baseToken:{symbol:'DREAD'},marketCap:120000,priceUsd:0.004,
-    liquidity:{usd:5000},priceChange:{h24:8,m5:-2}}},
-    {token:tokenB,pair:{baseToken:{symbol:'MOON'},marketCap:32000,priceUsd:0.006,
-    liquidity:{usd:4000},priceChange:{h24:-3,m5:1}}}];
-  const description=createDashboardEmbeds(entries)[0].description;
-  assert.match(description,/^\*\*DREAD\*\* · SOLANA/m);
-  assert.match(description,/^\*\*MOON\*\* · BASE/m);
-  assert.match(description,/\n────────────\n\*\*MOON\*\*/);
-  assert.doesNotMatch(description,/──── \*\*DREAD/);
-  assert.doesNotMatch(description,/\n\n/);
-  assert.match(description,/`{3}ansi/);
-  assert.match(description,/\x1b\[1;32m↑ \+8\.00%/);
-  assert.match(description,/\x1b\[1;31m↓ -2\.00%/);
+  const entries=[{
+    token:tokenA,
+    pair:{baseToken:{symbol:'DREAD'},marketCap:120000,priceUsd:0.004,liquidity:{usd:5000},
+      priceChange:{h24:8,m5:-2},url:'https://dexscreener.com/solana/demo'}
+  },{
+    token:tokenB,
+    pair:{baseToken:{symbol:'MOON'},marketCap:32000,priceUsd:0.006,liquidity:{usd:4000},
+      priceChange:{h24:-3,m5:1},url:'https://dexscreener.com/base/demo'}
+  }];
+  const card=createDashboardEmbeds(entries)[0];
+  assert.equal(card.fields.length,2);
+  assert.deepEqual(card.fields.map(f=>f.name),['DREAD · SOLANA','MOON · BASE']);
+  assert.ok(card.fields.every(f=>f.inline===false));
+  assert.match(card.fields[0].value,/\*\*MC \$120\.00K\*\*/);
+  assert.match(card.fields[0].value,/🟩 \+8\.00%/);
+  assert.match(card.fields[0].value,/🟥 -2\.00%/);
+  assert.match(card.fields[0].value,/\[View chart\]\(https:\/\/dexscreener\.com\/solana\/demo\)/);
+  assert.match(card.fields[1].value,/\[View chart\]\(https:\/\/dexscreener\.com\/base\/demo\)/);
+  assert.doesNotMatch(JSON.stringify(card),/────────/);
+  assert.ok(card.fields.every(f=>!f.value.includes('\n\n')&&!f.value.includes(String.fromCharCode(27))));
+});
+
+test('maximum twelve-token dashboard stays within Discord field and embed limits',()=>{
+  const entries=Array.from({length:12},(_,i)=>({
+    token:{chain:'solana',symbol:'COIN'+i,address:SOL.slice(0,-2)+String(i).padStart(2,'0')},
+    pair:{baseToken:{symbol:'COIN'+i},marketCap:123456789,priceUsd:0.000123,
+      liquidity:{usd:600000},priceChange:{h24:12,m5:-3},
+      url:'https://dexscreener.com/solana/'+'a'.repeat(52)}
+  }));
+  const card=createDashboardEmbeds(entries)[0];
+  assert.equal(card.fields.length,12);
+  assert.ok(card.fields.every(f=>f.name.length<=256&&f.value.length<=1024));
+  const size=card.title.length+card.description.length+card.footer.text.length+
+    card.fields.reduce((n,f)=>n+f.name.length+f.value.length,0);
+  assert.ok(size<=6000);
 });
 
 test('ATH preview posts and displays the exact live alert embed, with no preview-only text',async()=>{

@@ -344,36 +344,40 @@ function percentChange(v){const n=asChange(v);return n===null?'—':n>0?color('�
 export const ATH_ALERT_COOLDOWN_MS=30*60*1000;
 export const ATH_ALERT_MIN_INCREASE_PCT=5;
 
+// Native embed fields visually group each token without ANSI blocks or
+// hand-drawn separators. Chart URLs are Markdown links in the field values.
 export function createDashboardEmbeds(entries, clock = new Date()) {
-  const sections=entries.map(({token,pair,error})=>{
-    const symbol=safeText(pair?.baseToken?.symbol||token.symbol||token.name,24)||'Unknown token';
-    const title='**'+symbol+'** · '+safeText(token.chain,16).toUpperCase();
-    const chart=dexChartUrl(pair);
-    const tick=String.fromCharCode(96);
-    const links=(chart?'[Chart ↗]('+chart+') · ':'')+'CA '+tick+shortAddress(token.address)+tick;
-    if(!pair)return [title,'*Market data unavailable'+(error?' · API error':' · No priced pool')+'*',links].join('\n');
-    return [title,code([
-      'MC '+color(marketCapText(pair).replace(/^MC /,''),ANSI.cyan)+'  LIQ '+color(formatCompact(pair.liquidity?.usd,{usd:true})),
-      '24h '+percentChange(pair.priceChange?.h24)+'  5m '+percentChange(pair.priceChange?.m5),
-      'PRICE '+color(formatPrice(pair.priceUsd)),
-    ]),links].join('\n');
+  const tick = String.fromCharCode(96);
+  const fields = entries.map(({ token, pair, error }) => {
+    const symbol = safeText(pair?.baseToken?.symbol || token.symbol || token.name, 24) || 'Unknown token';
+    const chain = safeText(token.chain, 16).toUpperCase();
+    const chart = dexChartUrl(pair);
+    const links = (chart ? '[View chart](' + chart + ')  ·  ' : '') +
+      'CA ' + tick + shortAddress(token.address) + tick;
+    const lines = pair ? [
+      '**' + marketCapText(pair) + '**  ·  Liq **' +
+        formatCompact(pair.liquidity?.usd, { usd: true }) + '**',
+      '24h ' + priceAction(pair.priceChange?.h24) +
+        '  ·  5m ' + priceAction(pair.priceChange?.m5),
+      'Price **' + formatPrice(pair.priceUsd) + '**',
+      links,
+    ] : [
+      '*Market data unavailable' + (error ? ' · API error' : ' · No priced pool') + '*',
+      links,
+    ];
+    return { name: symbol + ' · ' + chain, value: lines.join('\n'), inline: false };
   });
-  const intro='**'+entries.length+' tracked token'+(entries.length===1?'':'s')+'** · Live DEX markets';
-  // Every separator has its own line, never shares the heading line.
-  const descriptions=[];
-  let d=intro;
-  for(const section of sections){
-    const sep=d===intro?'\n':'\n────────────\n';
-    if(d.length+sep.length+section.length>4096&&d!==intro){descriptions.push(d);d=section;}
-    else d+=sep+section;
-  }
-  descriptions.push(sections.length?d:'No tracked tokens. Use /tracker add to begin.');
-  return descriptions.map((description,index)=>({
-    title:index?'SpicyTracker · Markets (continued)':'SpicyTracker · Markets',
-    description,color:0x5865f2,
-    footer:{text:'DEX Screener · Indicative prices · ~1 min refresh'},
-    timestamp:clock.toISOString(),
-  }));
+  return [{
+    title: 'SpicyTracker · Markets',
+    description: entries.length
+      ? '**' + entries.length + ' tracked token' + (entries.length === 1 ? '' : 's') +
+        '** · Live DEX markets'
+      : 'No tracked tokens. Use /tracker add to begin.',
+    ...(fields.length ? { fields } : {}),
+    color: 0x5865f2,
+    footer: { text: 'DEX Screener · Indicative prices · ~1 min refresh' },
+    timestamp: clock.toISOString(),
+  }];
 }
 
 function dashboardMessageContent(){return "";}
