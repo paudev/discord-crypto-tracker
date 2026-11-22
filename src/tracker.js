@@ -276,6 +276,7 @@ export async function cleanupStores(client, guildId) {
 }
 
 export function formatCompact(n, { usd = false } = {}) {
+  if (n === null || n === undefined || n === '') return 'N/A';
   const number = Number(n);
   if (!Number.isFinite(number)) return 'N/A';
   const absolute = Math.abs(number);
@@ -303,66 +304,87 @@ function asChange(value) {if(value==null||value==="")return null;const n=Number(
 function formatChange(value) {const n=asChange(value);return n===null?"—":(n>0?"+":"")+n.toFixed(2)+"%";}
 
 
-const DASHBOARD_ACCENT = 0xf43f5e; // SpicyTracker red: a single cohesive embed.
-const TOKEN_DIVIDER = '────────────────────';
+// A neutral slate accent avoids implying that red means a loss.
+// This remains a single embed so links stay clickable and tokens aren't separate cards.
+const DASHBOARD_ACCENT = 0x64748b;
+const FRAME_TOP = '╭──────────────────────╮';
+const FRAME_MIDDLE = '├──────────────────────┤';
+const FRAME_BOTTOM = '╰──────────────────────╯';
+const TOKEN_ICONS = ['🪙','🧬','🎮','💎','🛸','🌌','🎯','🐉','🪐','🛰️','🔮','🧩'];
+const NAMED_TOKEN_ICONS = { dread:'🔥', cot:'🌊', realm:'🏰' };
 
 function shortAddress(address) {
   const value = String(address ?? '');
-  return value.length > 20 ? value.slice(0, 8) + '…' + value.slice(-6) : value;
-}
-function dexChartUrl(pair) {
-  const value = String(pair?.url ?? '');
-  return /^https:\/\/dexscreener\.com\/[a-z0-9/_-]+$/i.test(value) ? value : null;
-}
-function marketCapText(pair) {
-  const mc = Number(pair?.marketCap);
-  const fdv = Number(pair?.fdv);
-  if (Number.isFinite(mc) && mc > 0) return 'MC ' + formatCompact(mc, { usd: true });
-  if (Number.isFinite(fdv) && fdv > 0) return 'FDV ' + formatCompact(fdv, { usd: true });
-  return 'MC N/A';
-}
-function marketTrend(value) {
-  const num = asChange(value);
-  if (num === null || num === 0) return '';
-  // The arrow is not a circle and conveys direction without requiring ANSI blocks.
-  return num > 0 ? '↗ ' : '↘ ';
+  return value.length > 20 ? value.slice(0,8) + '…' + value.slice(-6) : value;
 }
 
-/**
- * Single embed / one continuous card. No repeated embeds or separate cards.
- * Discord cannot color individual metrics in an ordinary embed; use one brand
- * accent and blue chart links, with directional arrows instead of status dots.
- */
-export function createDashboardEmbeds(entries, clock = new Date()) {
-  const sections = entries.map(({ token, pair, error }) => {
-    const label = safeText(pair?.baseToken?.symbol || token.symbol || token.name, 22) || 'Unknown token';
-    const network = safeText(token.chain, 10).toUpperCase();
-    const chart = dexChartUrl(pair);
-    const header = '**' + label + '** · ' + network + (chart ? '  ·  [Chart ↗](' + chart + ')' : '');
-    if (!pair) return [header,
-      '*Market data unavailable' + (error ? ' · API error*' : ' · No priced pool*'),
-      'CA \`' + shortAddress(token.address) + '\`'].join('\n');
+function dexChartUrl(pair) {
+  const value = String(pair?.url ?? '');
+  return value.length <= 105 && /^https:\/\/dexscreener\.com\/[a-z0-9/_-]+$/i.test(value) ? value : null;
+}
+
+function marketCapText(pair) {
+  const mc=Number(pair?.marketCap), fdv=Number(pair?.fdv);
+  if (Number.isFinite(mc) && mc>0) return 'MC ' + formatCompact(mc,{usd:true});
+  if (Number.isFinite(fdv) && fdv>0) return 'FDV ' + formatCompact(fdv,{usd:true});
+  return 'MC N/A';
+}
+
+function tokenIcon(token,pair,usedIcons) {
+  const symbol=String(pair?.baseToken?.symbol||token.symbol||token.name||'').trim().toLowerCase();
+  const named=NAMED_TOKEN_ICONS[symbol];
+  if (named && !usedIcons.has(named)) { usedIcons.add(named); return named; }
+  const key=String(token.chain||'')+':'+String(token.address||'');
+  let hash=0;
+  for(const char of key) hash=(hash*31+char.codePointAt(0))>>>0;
+  for(let i=0;i<TOKEN_ICONS.length;i++){
+    const icon=TOKEN_ICONS[(hash+i)%TOKEN_ICONS.length];
+    if(!usedIcons.has(icon)){usedIcons.add(icon);return icon;}
+  }
+  return '🪙';
+}
+
+function changeIcon(value) {
+  const n=asChange(value);
+  return n===null||n===0?'📊':n>0?'📈':'📉';
+}
+
+export function createDashboardEmbeds(entries,clock=new Date()){
+  const usedIcons=new Set();
+  const sections=entries.map(({token,pair,error})=>{
+    const symbol=safeText(pair?.baseToken?.symbol||token.symbol||token.name,22)||'Unknown';
+    const network=safeText(token.chain,12).toUpperCase();
+    const icon=tokenIcon(token,pair,usedIcons);
+    const chart=dexChartUrl(pair);
+    const chartText=chart?' · [Chart ↗]('+chart+')':'';
+    const header='│ '+icon+' **'+symbol+'** · '+network+chartText;
+    const contract=shortAddress(token.address);
+    if(!pair)return [
+      header,
+      '│ ⚠️ Market data unavailable'+(error?' · API error':' · No priced pool'),
+      '│ 🏷️ CA `'+contract+'`',
+    ].join('\n');
     return [
       header,
-      '**' + marketCapText(pair) + '**  ·  24h **' + marketTrend(pair.priceChange?.h24) + formatChange(pair.priceChange?.h24) + '**',
-      'Price **' + formatPrice(pair.priceUsd) + '**  ·  Liq **' + formatCompact(pair.liquidity?.usd, { usd: true }) + '**',
-      '5m ' + marketTrend(pair.priceChange?.m5) + formatChange(pair.priceChange?.m5) + '  ·  CA \`' + shortAddress(token.address) + '\`',
+      '│ 💰 **'+marketCapText(pair)+'** · '+changeIcon(pair.priceChange?.h24)+' 24h **'+formatChange(pair.priceChange?.h24)+'**',
+      '│ 💵 Price **'+formatPrice(pair.priceUsd)+'** · 💧 Liq **'+formatCompact(pair.liquidity?.usd,{usd:true})+'**',
+      '│ ⚡ 5m **'+formatChange(pair.priceChange?.m5)+'**',
+      '│ 🏷️ CA `'+contract+'`',
     ].join('\n');
   });
-  const description = sections.length ? sections.join('\n\n' + TOKEN_DIVIDER + '\n\n')
-    : 'No tracked tokens. Use \`/tracker add\` to get started.';
+  const description=sections.length
+    ? FRAME_TOP+'\n\n'+sections.join('\n\n'+FRAME_MIDDLE+'\n\n')+'\n\n'+FRAME_BOTTOM
+    : 'No tracked tokens. Use `/tracker add` to get started.';
   return [{
-    title: 'SpicyTracker · ' + entries.length + ' token' + (entries.length === 1 ? '' : 's'),
+    title:'📊 SpicyTracker · '+entries.length+' token'+(entries.length===1?'':'s'),
     description,
-    color: DASHBOARD_ACCENT,
-    footer: { text: 'DEX Screener · Indicative prices' },
-    timestamp: clock.toISOString(),
+    color:DASHBOARD_ACCENT,
+    footer:{text:'DEX Screener · Indicative prices'},
+    timestamp:clock.toISOString(),
   }];
 }
-function dashboardMessageContent() {
-  // The title is inside the embed; don't repeat it above the card.
-  return '';
-}
+
+function dashboardMessageContent(){return '';}
 
 export async function hydrateTokenSymbols(client,store,{fetcher,entries}={}){
  const missing=store.config.tokens.filter(x=>!safeText(x.symbol,24));

@@ -7,7 +7,7 @@ A standalone, **free API** Discord price dashboard with **slash commands**. Verc
 - Supports Solana and EVM networks: Solana, Ethereum, Base, BSC, Arbitrum, Polygon, Avalanche, Ronin (where supported by DEX Screener).
 - Uses the public [DEX Screener API](https://docs.dexscreener.com/api/reference); **no API key required**. Looks up pools by token contract address and chooses the **highest USD-liquidity pool where that token is the base asset**, to avoid showing the quote token's price by mistake.
 - Price, 5-minute and 24-hour price change, market cap (or separately labeled FDV), liquidity, contract address, DEX Screener chart link.
-- Up to 12 tracked tokens appear within **one cohesive Discord embed**—no stacked token cards or redundant text header. A single SpicyTracker-red accent border surrounds a compact MC-first list. Blue links open each token's DEX chart, price movement uses directional arrows (↗/↘) with signed percentages instead of colored circle emojis, and a subtle divider separates tokens within the same card. Discord does not support per-word colors in native embeds; ANSI blocks would worsen readability. The existing dashboard message is edited in place.
+- Up to 12 tracked tokens are presented in **one framed Discord embed**, using top (`╭`), between-token (`├`) and closing (`╰`) separators. DREAD, CoT and REALM have distinct 🔥/🌊/🏰 icons; other contracts get stable non-repeating icons when possible. Distinct semantic emojis identify market cap, 24h trend, price, liquidity, 5m trend and contract address. The brand-independent **slate-blue border** (`#64748B`) is neutral and does not imply a token is up or down. Charts remain clickable Markdown links, and the bot edits the existing message in place. No new channels or GitHub Actions.
 - `/tracker add chain:solana address:<token-CA>` — add a token. On first use, the dashboard appears in the channel where you run the command.
 - `/tracker remove address:<token-CA>` — remove a token (optionally select network if duplicated).
 - `/tracker list` — show tracked chains, contracts and the dashboard channel.
@@ -144,5 +144,5 @@ The private storage message is a readable embed: tracked-token count, dashboard 
 
 ### Discord color and visual limits
 
-Native Discord embeds support a single accent color, not arbitrary colored words. This dashboard uses a unified SpicyTracker-red border, blue chart links, and clear directional arrows for price changes instead of unreliable ANSI code blocks. It is one embed in one message; tracked tokens remain separate rows inside the same card.
+Native Discord embeds support a single accent color, not arbitrary colored words. The unified embed uses a **neutral slate accent (`#64748B`)** rather than red/green performance colors, so the border cannot be mistaken for a falling token price. Colored text inside the embed is not available; emoji, bold typography, and clickable blue chart links provide hierarchy without unreliable ANSI blocks. The visual frame uses Unicode box-drawing characters, whose precise alignment can vary on mobile and proportional fonts. No code blocks are used because they would break Markdown chart links.
 
