@@ -1,6 +1,6 @@
 import { CHAIN_CHOICES, MAX_TOKENS, safeText } from './discord.js';
 import { normalizeToken, fetchTokenPair } from './dexscreener.js';
-import { cleanupStores, loadStore, publishDashboard, saveStore, selectStorageChannel } from './tracker.js';
+import { cleanupStores, hydrateTokenSymbols, loadStore, publishDashboard, saveStore, selectStorageChannel } from './tracker.js';
 
 const STRING = 3;
 const CHANNEL = 7;
@@ -89,7 +89,7 @@ export async function executeTrackerCommand({ interaction, client, applicationId
     if (!store) return 'No data channel configured. Create a private text channel, then run `/tracker storage target:#your-private-channel` before adding tokens.';
     if (store.config.tokens.some(x => x.chain === token.chain && x.address === token.address)) return 'That token is already being tracked.';
     if (store.config.tokens.length >= MAX_TOKENS) return `This dashboard supports a maximum of ${MAX_TOKENS} tokens.`;
-    store.config.tokens.push(token);
+    store.config.tokens.push({ ...token, symbol: safeText(pair.baseToken?.symbol, 24) || undefined });
     await saveStore(client, store);
     try {
       await publishDashboard(client, store, { fetcher });
@@ -105,9 +105,10 @@ export async function executeTrackerCommand({ interaction, client, applicationId
   // Upgrade legacy raw JSON storage to a readable embed without posting to the price dashboard.
   if (store.needsMigration) await saveStore(client, store);
   if (command.name === 'list') {
+    await hydrateTokenSymbols(client, store, { fetcher });
     if (!store.config.tokens.length) return `No tokens tracked yet. Dashboard: <#${store.config.dashboardChannelId}>.`;
     return `**Tracked tokens (${store.config.tokens.length}/${MAX_TOKENS}):**\n` + store.config.tokens
-      .map((x, i) => `${i + 1}. **${x.chain}** · \`${x.address}\``).join('\n')
+      .map((x, i) => `${i + 1}. **${safeText(x.symbol || x.name, 24) || 'Unknown token'}** · ${x.chain.toUpperCase()} · \`${x.address}\``).join('\n')
       + `\nDashboard: <#${store.config.dashboardChannelId}> · Storage: <#${store.configChannelId}>`;
   }
   if (command.name === 'remove') {

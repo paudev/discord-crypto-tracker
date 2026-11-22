@@ -52,7 +52,7 @@ export function createStorageEmbed(config) {
     ? tokens.map((token, i) => {
         const address = String(token.address ?? "");
         const short = address.length > 22 ? `${address.slice(0, 8)}…${address.slice(-6)}` : address;
-        return `${i + 1}. **${safeText(token.chain, 16).toUpperCase()}** · \`${short}\``;
+        return `${i + 1}. **${safeText(token.symbol || token.name, 24) || 'Unknown token'}** · \`${short}\``;
       }).join("\n")
     : "*No tokens are currently saved in this watchlist.*";
   return {
@@ -292,55 +292,71 @@ export function formatPrice(n) {
   if (!Number.isFinite(value) || value <= 0) return 'N/A';
   if (value >= 1) return `$${value.toLocaleString('en-US', { maximumFractionDigits: 4 })}`;
   if (value >= 0.0001) return `$${value.toFixed(6).replace(/0+$/, '').replace(/\.$/, '')}`;
-  return `$${value.toPrecision(5).replace(/e\+?/, 'e')}`;
+  return '$' + value.toPrecision(5).replace(/e\+?/, 'e')
+    .replace(/(\.\d*?[1-9])0+(?=e|$)/, '$1')
+    .replace(/\.0+(?=e|$)/, '');
 }
 
-// Compact single-message dashboard. Discord supports one accent color per embed.
-// Individual tokens get colored trend icons; the accent reflects the majority 24h trend.
-const GREEN = 0x2ecc71;
-const RED = 0xe74c3c;
-const NEUTRAL = 0x5865f2;
+// Readable multi-token sections with a separator, edited in one Discord message.
+function asChange(value) {if(value==null||value==="")return null;const n=Number(value);return Number.isFinite(n)?n:null;}
 
-function asChange(value){if(value==null||value==="")return null;const n=Number(value);return Number.isFinite(n)?n:null;}
+function formatChange(value) {const n=asChange(value);return n===null?"—":(n>0?"+":"")+n.toFixed(2)+"%";}
 
-function formatChange(value){const n=asChange(value);return n===null?"—":`${n>0?"+":""}${n.toFixed(2)}%`;}
+function trendIcon(value) {const n=asChange(value);return n===null||n===0?"⚪":n>0?"🟢":"🔴";}
 
-function trendIcon(value){const n=asChange(value);return n===null||n===0?"⚪":n>0?"🟢":"🔴";}
+function shortAddress(address) {const value=String(address??"");return value.length>20?value.slice(0,8)+"…"+value.slice(-6):value;}
 
-function shortAddress(address){const value=String(address??"");return value.length>20?`${value.slice(0,8)}…${value.slice(-6)}`:value;}
+function dashboardAccent(entries) {const changes=entries.map(({pair})=>asChange(pair?.priceChange?.h24)).filter(x=>x!==null);const p=changes.filter(n=>n>0).length,negative=changes.filter(n=>n<0).length;return p>negative?0x2ecc71:negative>p?0xe74c3c:0x5865f2;}
 
-function dashboardAccent(entries){const changes=entries.map(({pair})=>asChange(pair?.priceChange?.h24)).filter(x=>x!==null);const positive=changes.filter(n=>n>0).length;const negative=changes.filter(n=>n<0).length;return positive>negative?GREEN:negative>positive?RED:NEUTRAL;}
+function dexChartUrl(pair) {const url=String(pair?.url??"");return /^https:\/\/dexscreener\.com\/[a-z0-9/_-]+$/i.test(url)?url:null;}
 
 export function createDashboardEmbed(entries,clock=new Date()){
- const fields=entries.map(({token,pair,error})=>{
-   const symbol=safeText(pair?.baseToken?.symbol,18)||"Token";
-   const ca=shortAddress(token.address);
-   const title=`${trendIcon(pair?.priceChange?.h24)} ${symbol} · ${token.chain.toUpperCase()}`;
-   if(!pair) return {name:`⚠️ ${symbol} · ${token.chain.toUpperCase()}`,value:[`**Price unavailable** · ${error?"API issue":"No qualifying pool"}`,`CA \`${ca}\``].join("\n"),inline:false};
-   const rawUrl=String(pair.url||"");
-   const url=/^https:\/\/dexscreener\.com\/[a-z0-9/_-]+$/i.test(rawUrl)?rawUrl:null;
-   const marketCap=Number(pair.marketCap),fdv=Number(pair.fdv);
-   const capDisplay=Number.isFinite(marketCap)&&marketCap>0
-     ? formatCompact(marketCap,{usd:true}) : Number.isFinite(fdv)&&fdv>0
-       ? formatCompact(fdv,{usd:true}) : 'N/A';
-   const capLabel=Number.isFinite(marketCap)&&marketCap>0 ? 'MARKET CAP' : Number.isFinite(fdv)&&fdv>0 ? 'FULLY DILUTED VALUE' : 'MARKET CAP';
-   return {name:title,value:[
-     `💰 **${capLabel}**`,
-     `**${capDisplay}**`,
-     "",
-     `**Price**  ${formatPrice(pair.priceUsd)}`,
-     `**24h** ${trendIcon(pair.priceChange?.h24)} **${formatChange(pair.priceChange?.h24)}**  ·  **5m** ${formatChange(pair.priceChange?.m5)}`,
-     `💧 **Liquidity**  ${formatCompact(pair.liquidity?.usd,{usd:true})}`,
-     "",
-     `${url ? `[View chart](${url})  ·  ` : ''}CA \`${ca}\``,
-   ].join("\n"),inline:false};
+ const pieces=entries.map(({token,pair,error})=>{
+  const symbol=safeText(pair?.baseToken?.symbol||token.symbol||token.name,24)||"Unknown";
+  const title=`${trendIcon(pair?.priceChange?.h24)} **${symbol}** · ${safeText(token.chain,16).toUpperCase()}`;
+  const ca=shortAddress(token.address);
+  if(!pair)return [title,`⚠️ **Market data unavailable**${error?" · API error":" · No priced pool"}`,`CA \`${ca}\``].join("\n");
+  const mc=Number(pair.marketCap),fdv=Number(pair.fdv);
+  const realMC=Number.isFinite(mc)&&mc>0;
+  const realFDV=Number.isFinite(fdv)&&fdv>0;
+  const cap=realMC?formatCompact(mc,{usd:true}):realFDV?formatCompact(fdv,{usd:true}):"N/A";
+  const capLabel=realMC||!realFDV?"MC":"FDV";
+  const url=dexChartUrl(pair);
+  return [
+   title,
+   `💰 **${capLabel}: ${cap}**`,
+   "",
+   `Price **${formatPrice(pair.priceUsd)}**  ·  Liquidity **${formatCompact(pair.liquidity?.usd,{usd:true})}**`,
+   `24h ${trendIcon(pair.priceChange?.h24)} **${formatChange(pair.priceChange?.h24)}**  ·  5m ${trendIcon(pair.priceChange?.m5)} ${formatChange(pair.priceChange?.m5)}`,
+   `${url?`[View chart](${url})  ·  `:""}CA \`${ca}\``,
+  ].join("\n");
  });
- return {title:"📈 SpicyTracker · Crypto Markets",description:entries.length?`${entries.length} token${entries.length===1?"":"s"} tracked · Updates the same message every minute`:"No tracked tokens · Use `/tracker add` to get started",color:dashboardAccent(entries),fields,footer:{text:"DEX Screener · Prices are indicative"},timestamp:clock.toISOString()};
+ const details=pieces.join("\n\n────────────────────\n\n");
+ return {
+  title:"📈 SpicyTracker · Crypto Markets",
+  description:`${entries.length} token${entries.length===1?"":"s"} tracked · Auto-refresh ~1 min${details?"\n\n"+details:"\n\nUse /tracker add to start tracking."}`,
+  color:dashboardAccent(entries),
+  footer:{text:"DEX Screener · Market data is indicative"},
+  timestamp:clock.toISOString()
+ };
+}
+
+export async function hydrateTokenSymbols(client,store,{fetcher,entries}={}){
+ const missing=store.config.tokens.filter(x=>!safeText(x.symbol,24));
+ const pairs=entries||(missing.length?await fetchAllPairs(missing,fetcher):[]);
+ let changed=false;
+ for(const {token,pair} of pairs){
+  const symbol=safeText(pair?.baseToken?.symbol,24);
+  if(symbol&&symbol!==token.symbol){token.symbol=symbol;changed=true;}
+ }
+ if(changed)await saveStore(client,store);
+ return changed;
 }
 
 export async function publishDashboard(client, store, { fetcher, now } = {}) {
   const tokens = store.config.tokens;
   const entries = await fetchAllPairs(tokens, fetcher);
+  await hydrateTokenSymbols(client, store, { entries });
   const embed = createDashboardEmbed(entries, now ? now() : new Date());
   const channelId = store.config.dashboardChannelId;
   let messageId = store.config.dashboardMessageId;

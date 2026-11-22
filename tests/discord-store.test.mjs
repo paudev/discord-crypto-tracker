@@ -271,7 +271,7 @@ test('formatted storage embeds preserve configuration on save and through cleanu
     tokens: [{ chain: 'solana', address: SOL }] };
   const item = createStorageEmbed(config);
   assert.ok(item.description.includes('||CRYPTO_TRACKER_CONFIG_V1'));
-  assert.match(item.description, /SOLANA/);
+  assert.match(item.description, /Unknown token/);
   await selectStorageChannel(client, { guildId: GUILD, targetId: PRIVATE, fallbackDashboardChannelId: GENERAL });
   const result = await cleanupStores(client, GUILD);
   assert.equal(result.kept, PRIVATE);
@@ -311,4 +311,27 @@ test('old formatted storage embeds are migrated to bottom spoiler in the same me
     updated.embeds[0].description.indexOf('**Internal configuration'));
   assert.equal((await loadStore(client, GUILD)).needsMigration, false);
   assert.deepEqual((await loadStore(client, GUILD)).config.tokens, existingConfig.tokens);
+});
+
+
+test('newly added token uses its DEX ticker in private storage', async function testNewSymbol(){
+ const client=createFakeDiscord();
+ await executeTrackerCommand({interaction:interaction("storage",[opt("target",PRIVATE)]),client,applicationId:APP});
+ const reply=await executeTrackerCommand({interaction:interaction("add",[opt("chain","solana"),opt("address",SOL)]),client,applicationId:APP,fetcher:pairResponse});
+ assert.match(reply,/Added/);
+ const store=await loadStore(client,GUILD);
+ assert.equal(store.config.tokens[0].symbol,"SOL");
+ assert.match(client.messages.get(PRIVATE)[0].embeds[0].description,/\*\*SOL\*\*/);
+});
+
+test('legacy tokens gain their DEX ticker on refresh without posting extra messages', async function testOldSymbol(){
+ const client=createFakeDiscord();
+ await selectStorageChannel(client,{guildId:GUILD,targetId:PRIVATE,fallbackDashboardChannelId:GENERAL});
+ const store=await loadStore(client,GUILD);
+ store.config.tokens=[{chain:"solana",address:SOL}];
+ await saveStore(client,store);
+ await publishDashboard(client,store,{fetcher:pairResponse});
+ assert.equal((await loadStore(client,GUILD)).config.tokens[0].symbol,"SOL");
+ assert.match(client.messages.get(PRIVATE)[0].embeds[0].description,/\*\*SOL\*\*/);
+ assert.equal(client.messages.get(GENERAL).length,1);
 });

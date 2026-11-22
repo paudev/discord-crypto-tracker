@@ -33,16 +33,13 @@ test('fetches a free API pair without an API key', async () => {
   assert.equal(pair.priceUsd, '140');
 });
 
-test('formats tiny token prices and safe token fields', () => {
-  assert.match(formatPrice(0.00000001435), /1\.435/);
-  const embed = createDashboardEmbed([{ token: { chain: 'solana', address: SOL }, pair: {
-    chainId: 'solana', baseToken: { address: SOL, symbol: '@everyone' }, priceUsd: '0.01', liquidity: { usd: 15000 },
-    marketCap: 550000, priceChange: { m5: 1.5, h24: -3.2 }, url: 'https://dexscreener.com/solana/abc'
-  } }], new Date('2026-11-23T00:00:00Z'));
-  assert.match(embed.fields[0].value, /\$0\.01/);
-  assert.match(embed.fields[0].value, /💰 \*\*MARKET CAP\*\*\n\*\*\$550\.00K\*\*/);
-  assert.doesNotMatch(embed.fields[0].name, /@/);
-  assert.equal(embed.timestamp, '2026-11-23T00:00:00.000Z');
+test('formats tiny token prices safely', function testTiny(){
+ assert.match(formatPrice(0.00000001435),/1\.435/);
+ const e=createDashboardEmbed([{token:{chain:"solana",address:SOL},pair:{baseToken:{symbol:"@everyone"},marketCap:550000,priceUsd:"0.01",liquidity:{usd:15000},priceChange:{h24:-3.2,m5:1.5},url:"https://dexscreener.com/solana/abc"}}],new Date("2026-11-23T00:00:00Z"));
+ assert.match(e.description,/\$0\.01/);
+ assert.match(e.description,/💰 \*\*MC: \$550\.00K\*\*/);
+ assert.doesNotMatch(e.description,/@everyone/);
+ assert.equal(e.timestamp,"2026-11-23T00:00:00.000Z");
 });
 
 test('serializes and restores Discord-persisted token configuration', () => {
@@ -52,46 +49,42 @@ test('serializes and restores Discord-persisted token configuration', () => {
 });
 
 
-test('market cap is primary and other metrics have comfortable spacing', () => {
-  const embed = createDashboardEmbed([{
-    token: { chain: 'solana', address: SOL },
-    pair: { baseToken: { symbol: 'DREAD' }, priceUsd: '0.00004431', marketCap: 38940,
-      liquidity: { usd: 13610 }, priceChange: { h24: 52.45 },
-      url: 'https://dexscreener.com/solana/abc' },
-  }]);
-  assert.equal(embed.color, 0x2ecc71);
-  assert.match(embed.fields[0].name, /^🟢 DREAD/);
-  const lines = embed.fields[0].value.split('\n');
-  assert.equal(lines.length, 8);
-  assert.equal(lines[0], '💰 **MARKET CAP**');
-  assert.equal(lines[1], '**$38.94K**');
-  assert.equal(lines[2], '');
-  assert.ok(lines[3].includes('**Price**  $0.00004431'));
-  assert.ok(lines[4].includes('**24h** 🟢 **+52.45%**') && lines[4].includes('**5m** —'));
-  assert.ok(lines[5].includes('💧 **Liquidity**  $13.61K'));
-  assert.equal(lines[6], '');
-  assert.ok(lines[7].includes('View chart') && lines[7].includes('So111111…111112'));
-  assert.ok(!embed.fields[0].value.includes(SOL));
+test('market cap and its value appear on the same line', function testCap(){
+ const e=createDashboardEmbed([{token:{chain:"solana",address:SOL},pair:{baseToken:{symbol:"DREAD"},priceUsd:"0.00004431",marketCap:38940,liquidity:{usd:13610},priceChange:{h24:52.45},url:"https://dexscreener.com/solana/abc"}}]);
+ assert.equal(e.color,0x2ecc71);
+ assert.equal(e.fields,undefined);
+ assert.match(e.description,/🟢 \*\*DREAD\*\* · SOLANA/);
+ const lines=e.description.split("\n");
+ assert.ok(lines.includes("💰 **MC: $38.94K**"));
+ assert.ok(lines.some(x=>x.includes("Price **$0.00004431**")&&x.includes("Liquidity **$13.61K**")));
+ assert.ok(lines.some(x=>x.includes("24h 🟢 **+52.45%**")&&x.includes("5m ⚪ —")));
+ assert.ok(lines.some(x=>x.includes("[View chart]")&&x.includes("So111111…111112")));
 });
 
-test('negative token has red accent and compact signed changes', () => {
-  const embed = createDashboardEmbed([{
-    token: { chain: 'solana', address: SOL },
-    pair: { baseToken: { symbol: 'DOWN' }, priceUsd: '1.2', priceChange: { m5: -0.3, h24: -10.2 } },
-  }]);
-  assert.equal(embed.color, 0xe74c3c);
-  assert.match(embed.fields[0].name, /^🔴/);
-  assert.ok(embed.fields[0].value.includes('**5m** -0.30%'));
-  assert.ok(embed.fields[0].value.includes('**24h** 🔴 **-10.20%**'));
+test('negative changes retain red styling', function testNegative(){
+ const e=createDashboardEmbed([{token:{chain:"solana",address:SOL},pair:{baseToken:{symbol:"DOWN"},priceUsd:"1.2",priceChange:{h24:-10.2,m5:-0.3}}}]);
+ assert.equal(e.color,0xe74c3c);
+ assert.ok(e.description.includes("🔴 **DOWN**"));
+ assert.ok(e.description.includes("5m 🔴 -0.30%"));
+ assert.ok(e.description.includes("24h 🔴 **-10.20%**"));
 });
 
-test('twelve mixed tokens fit into one neutral Discord embed', () => {
-  const entries = Array.from({length: 12}, (_, i) => ({
-    token: {chain: 'solana', address: SOL},
-    pair: {baseToken: {symbol: 'T' + i}, priceUsd: '0.01', priceChange: {h24: i % 2 ? -1 : 1}},
-  }));
-  const embed = createDashboardEmbed(entries);
-  assert.equal(embed.color, 0x5865f2);
-  assert.equal(embed.fields.length, 12);
-  assert.ok(JSON.stringify(embed).length < 6000);
+test('twelve tokens have separators and fit the embed limit', function testTwelve(){
+ const entries=Array.from({length:12},(_,i)=>({token:{chain:"solana",address:SOL},pair:{baseToken:{symbol:"T"+i},priceUsd:"0.01",marketCap:20000+i,priceChange:{h24:i%2?-1:1}}}));
+ const e=createDashboardEmbed(entries);
+ assert.equal(e.color,0x5865f2);
+ assert.equal(e.fields,undefined);
+ assert.equal(e.description.split("────────────────────").length-1,11);
+ assert.ok(e.description.length<=4096);
+ assert.ok(JSON.stringify(e).length<6000);
+});
+
+test('each token has a distinct market cap block', function testSections(){
+ const entries=[{token:{chain:"solana",address:SOL},pair:{baseToken:{symbol:"DREAD"},marketCap:38940,priceUsd:"0.001"}},
+ {token:{chain:"base",address:ETH},pair:{baseToken:{symbol:"CoT"},marketCap:2320000,priceUsd:"0.023"}}];
+ const e=createDashboardEmbed(entries);
+ const sections=e.description.split("────────────────────");
+ assert.equal(sections.length,2);
+ assert.match(sections[0],/MC: \$38\.94K/);
+ assert.match(sections[1],/MC: \$2\.32M/);
 });
