@@ -321,49 +321,55 @@ function dexChartUrl(pair){const value=String(pair?.url??"");return value.length
 
 function marketCapText(pair){const mc=Number(pair?.marketCap),fdv=Number(pair?.fdv);if(Number.isFinite(mc)&&mc>0)return "MC "+formatCompact(mc,{usd:true});if(Number.isFinite(fdv)&&fdv>0)return "FDV "+formatCompact(fdv,{usd:true});return "MC N/A";}
 
-function priceAction(value){
- const n=asChange(value);
- if(n===null)return "—";
- if(n>0)return "🟩 ▲ "+formatChange(n);
- if(n<0)return "🟥 ▼ "+formatChange(n);
- return "➖ "+formatChange(n);
+
+// The leading colored square is the entire movement indicator. Adding ▲/▼
+// beside it caused wrapped glyphs and made the Discord dashboard hard to scan.
+function priceAction(value) {
+  const change = asChange(value);
+  if (change === null) return '—';
+  if (change > 0) return '🟩 ' + formatChange(change);
+  if (change < 0) return '🟥 ' + formatChange(change);
+  return formatChange(change);
 }
 
 export function createDashboardEmbeds(entries, clock = new Date()) {
-  // Discord embeds have one accent color, so market moves use small,
-  // data-driven green/red markers. No token-specific icons or extra cards.
+  // Real Discord headers, clear spacing, one neutral brand accent and
+  // data-driven token names. This stays one embed in one edited message.
   const sections = entries.map(({ token, pair, error }) => {
     const symbol = safeText(pair?.baseToken?.symbol || token.symbol || token.name, 24) || 'Unknown token';
     const chain = safeText(token.chain, 16).toUpperCase();
+    const heading = '### ' + symbol + ' · ' + chain;
     const chart = dexChartUrl(pair);
-    const header = '**' + symbol + '**  ·  `' + chain + '`' +
-      (chart ? '  ·  [Chart ↗](' + chart + ')' : '');
-    const ca = 'CA `' + shortAddress(token.address) + '`';
+    const links = (chart ? '[View chart ↗](' + chart + ')  ·  ' : '') +
+      'CA `' + shortAddress(token.address) + '`';
     if (!pair) return [
-      header,
-      '',
+      heading,
       '*Market data unavailable' + (error ? ' · API error' : ' · No priced pool') + '*',
-      ca,
+      links,
     ].join('\n');
+
     return [
-      header,
-      '',
+      heading,
       '**' + marketCapText(pair) + '**',
-      '24h **' + priceAction(pair.priceChange?.h24) + '**  ·  5m **' + priceAction(pair.priceChange?.m5) + '**',
-      'Price **' + formatPrice(pair.priceUsd) + '**  ·  Liquidity **' + formatCompact(pair.liquidity?.usd, { usd: true }) + '**',
-      ca,
+      '24h **' + priceAction(pair.priceChange?.h24) +
+        '**  ·  5m **' + priceAction(pair.priceChange?.m5) + '**',
+      'Price **' + formatPrice(pair.priceUsd) +
+        '**  ·  Liq **' + formatCompact(pair.liquidity?.usd, { usd: true }) + '**',
+      links,
     ].join('\n');
   });
-  const divider = '────────────────────';
-  const count = entries.length;
-  const intro = '**' + count + ' tracked token' + (count === 1 ? '' : 's') + '**  ·  Auto-refresh ~1 min';
+  const divider = '────────────';
+  const tokenCount = entries.length;
+  const intro = '**' + tokenCount + ' tracked token' + (tokenCount === 1 ? '' : 's') +
+    '**  ·  Live DEX markets';
   return [{
-    title: 'SpicyTracker  /  Market Watch',
+    title: 'SpicyTracker · Markets',
     description: sections.length
-      ? intro + '\n\n' + divider + '\n\n' + sections.join('\n\n' + divider + '\n\n') + '\n\n' + divider
+      ? intro + '\n\n' + divider + '\n\n' + sections.join('\n\n' + divider + '\n\n') +
+        '\n\n' + divider
       : 'No tracked tokens. Use `/tracker add` to begin.',
     color: 0x5865f2,
-    footer: { text: 'DEX Screener  ·  Indicative market data' },
+    footer: { text: 'DEX Screener · Indicative prices · ~1 min refresh' },
     timestamp: clock.toISOString(),
   }];
 }

@@ -7,7 +7,7 @@ A standalone, **free API** Discord price dashboard with **slash commands**. Verc
 - Supports Solana and EVM networks: Solana, Ethereum, Base, BSC, Arbitrum, Polygon, Avalanche, Ronin (where supported by DEX Screener).
 - Uses the public [DEX Screener API](https://docs.dexscreener.com/api/reference); **no API key required**. Looks up pools by token contract address and chooses the **highest USD-liquidity pool where that token is the base asset**, to avoid showing the quote token's price by mistake.
 - Price, 5-minute and 24-hour price change, market cap (or separately labeled FDV), liquidity, contract address, DEX Screener chart link.
-- Up to 12 dynamically tracked tokens in **one cohesive Discord embed, updated in one existing message**. The dashboard uses a consistent blurple (`#5865F2`) accent, meaningful spacing and slim top/between/bottom separators, with **market cap prominent**, 24h and 5m movements indicated by **🟩 ▲ / 🟥 ▼ / ➖**, price, liquidity, a shortened contract and a clickable chart link. Labels come from DEX Screener or saved metadata. No token-specific emojis, stacked cards, ASCII frames, duplicate messages, extra channels or GitHub Actions.
+- Track up to 12 arbitrary tokens in **one edited Discord message and one embed**. A stronger visual hierarchy uses Markdown token headings, prominent single-line market caps, consistent price/liquidity labels, a brief chart/contract row, and short opening/between/closing separators. The color accent stays Discord blurple (`#5865F2`); **🟩 +N% means gain, 🟥 -N% means loss**, exactly zero is plain `0.00%`, and unavailable data is `—`. There are no separate arrow emojis, token-specific icons, ASCII box frames, new channels, or GitHub Actions.
 - `/tracker add chain:solana address:<token-CA>` — add a token. On first use, the dashboard appears in the channel where you run the command.
 - `/tracker remove address:<token-CA>` — remove a token (optionally select network if duplicated).
 - `/tracker list` — show tracked chains, contracts and the dashboard channel.
@@ -144,7 +144,7 @@ The private storage message is a readable embed: tracked-token count, dashboard 
 
 ### Discord color and formatting constraints
 
-Discord's normal embeds do not offer individually colored text or a custom card background. The bot uses a high-contrast **blurple (#5865F2) left border**, blue chart hyperlinks, and red/green indicators 🟥 ▼ / 🟩 ▲ only for actual movements. It does not use ANSI blocks, random icon mappings, additional token cards, or artificial box frames. Token identities remain dynamically resolved. The one dashboard message is updated in place.
+Discord's normal embeds do not offer individually colored text or a custom card background. The bot uses a high-contrast **blurple (#5865F2) left border**, blue chart hyperlinks, and single colored markers 🟩 / 🟥 only for actual gains and losses. It does not use ANSI blocks, random icon mappings, additional token cards, or artificial box frames. Token identities remain dynamically resolved. The one dashboard message is updated in place.
 
 ## Observed market-cap high alerts
 
@@ -164,12 +164,16 @@ The existing authenticated one-minute `POST /api/refresh` call **automatically r
 
 ## Dashboard design contract
 
-Preserve all requirements together: one edited Discord message and one embed, dynamic token labels, no arbitrary/token-specific emoji mappings, vivid constant blurple accent (`#5865F2`), **🟩 ▲ / 🟥 ▼ / ➖ exclusively for observed price movement**, clear start/between/end dividers, comfortable whitespace, bold MC and value together on one line, 24h and 5m movements, price and liquidity, shortened CA, clickable chart, 12-token capacity, and safe empty/missing data. Keep existing private storage, slash commands, Cloudflare schedule, and Vercel configuration unchanged.
+Preserve all requirements together: one edited Discord message and one embed, dynamic token labels, no arbitrary/token-specific emoji mappings, vivid constant blurple accent (`#5865F2`), **🟩 on gains / 🟥 on losses, no extra arrows or flat-state emoji**, clear start/between/end dividers, comfortable whitespace, bold MC and value together on one line, 24h and 5m movements, price and liquidity, shortened CA, clickable chart, 12-token capacity, and safe empty/missing data. Keep existing private storage, slash commands, Cloudflare schedule, and Vercel configuration unchanged.
 
 ### Price indicator contract
 
-For **both 24h and 5m**: increases use **🟩 ▲** (green square and up triangle), decreases use **🟥 ▼** (red square and down triangle), exact zero uses **➖**, and missing data is **—**. This is data-driven, never tied to the token's name. The overall dashboard border stays blurple because multiple tokens may move in different directions. Discord native embeds do not support true per-character font colors.
+For **24h and 5m**: increases use **🟩 +N%**, decreases use **🟥 -N%**. One colored square is enough; no additional arrows, chart emojis or generic token icons. Zero is **0.00%** and missing data is **—**, both without emoji. The dashboard uses Unicode short separators plus Markdown token headers in the single embed description. The overall border stays blurple because tokens can move in opposite directions. Discord native embeds do not support true per-character font colors.
 
 ## Preview security and permissions
 
 The ATH preview only fetches the selected token's live current pair and market cap to construct a **simulated** high. It posts a labeled test embed with Discord `allowed_mentions.parse=[]`, does not update `h`/`a`, and never changes the normal dashboard. Its destination must be an existing guild text channel (not private storage), and SpicyTracker needs View Channel, Send Messages and Embed Links permissions. If no target is supplied, it uses the configured ATH channel, otherwise the calling channel. The simulated percentage defaults to 15% and accepts values from 1 to 100%.
+
+### Latest dashboard layout note
+
+Aesthetic regression rule: do not combine a colored square with ▲/▼; this previously caused confusing wraps in Discord. Prefer a single green/red marker beside a signed percentage, short separators, real markdown headers for dynamic tokens, and no extra dashboard posts. ATH notifications remain independently configurable through `/tracker ath-channel` and `/tracker ath-preview`.
