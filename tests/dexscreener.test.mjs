@@ -50,3 +50,43 @@ test('serializes and restores Discord-persisted token configuration', () => {
   assert.deepEqual(parseConfig(serializeConfig(config)), config);
   assert.equal(parseConfig('just a random message'), null);
 });
+
+
+test('compact dashboard groups metrics in three short lines', () => {
+  const embed = createDashboardEmbed([{
+    token: { chain: 'solana', address: SOL },
+    pair: { baseToken: { symbol: 'DREAD' }, priceUsd: '0.00004431', marketCap: 38940,
+      liquidity: { usd: 13610 }, priceChange: { h24: 52.45 },
+      url: 'https://dexscreener.com/solana/abc' },
+  }]);
+  assert.equal(embed.color, 0x2ecc71);
+  assert.match(embed.fields[0].name, /^🟢 DREAD/);
+  const lines = embed.fields[0].value.split('\n');
+  assert.equal(lines.length, 3);
+  assert.ok(lines[0].includes('5m **—**') && lines[0].includes('24h **+52.45%**'));
+  assert.ok(lines[1].includes('MC **$38.94K**') && lines[1].includes('Liq **$13.61K**'));
+  assert.ok(lines[2].includes('Chart') && lines[2].includes('So111111…111112'));
+  assert.ok(!embed.fields[0].value.includes(SOL));
+});
+
+test('negative token has red accent and compact signed changes', () => {
+  const embed = createDashboardEmbed([{
+    token: { chain: 'solana', address: SOL },
+    pair: { baseToken: { symbol: 'DOWN' }, priceUsd: '1.2', priceChange: { m5: -0.3, h24: -10.2 } },
+  }]);
+  assert.equal(embed.color, 0xe74c3c);
+  assert.match(embed.fields[0].name, /^🔴/);
+  assert.ok(embed.fields[0].value.includes('5m **-0.30%**'));
+  assert.ok(embed.fields[0].value.includes('24h **-10.20%**'));
+});
+
+test('twelve mixed tokens fit into one neutral Discord embed', () => {
+  const entries = Array.from({length: 12}, (_, i) => ({
+    token: {chain: 'solana', address: SOL},
+    pair: {baseToken: {symbol: 'T' + i}, priceUsd: '0.01', priceChange: {h24: i % 2 ? -1 : 1}},
+  }));
+  const embed = createDashboardEmbed(entries);
+  assert.equal(embed.color, 0x5865f2);
+  assert.equal(embed.fields.length, 12);
+  assert.ok(JSON.stringify(embed).length < 6000);
+});
