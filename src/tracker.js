@@ -360,23 +360,21 @@ export function createDashboardEmbeds(entries, clock = new Date()) {
       '*Market data unavailable' + (error ? ' · API error' : ' · No priced pool') + '*',
       links,
     ].join('\n');
-    const coloredChange = (value) => {
+    // Discord cannot display ANSI colors inline with normal Markdown. Use
+    // native bold values and directional emoji without code-block padding.
+    const movement = (value) => {
       const amount = asChange(value);
-      return amount === null ? '—' :
-        color(priceAction(value), amount > 0 ? ANSI.green : amount < 0 ? ANSI.red : ANSI.white);
+      if (amount === null) return '—';
+      const marker = amount > 0 ? '🟩 ' : amount < 0 ? '🟥 ' : '';
+      return marker + '**' + formatChange(amount) + '**';
     };
     return [
       heading,
-      code([
-        'MC ' + color(marketCapText(pair).replace(/^MC /, ''), ANSI.cyan) +
-          '  LIQ ' + color(formatCompact(pair.liquidity?.usd, { usd: true })),
-        '24h ' + coloredChange(pair.priceChange?.h24) +
-          '  5m ' + coloredChange(pair.priceChange?.m5),
-        'PRICE ' + color(formatPrice(pair.priceUsd)),
-      ]),
-      // A blank line after the fenced ANSI block lets Discord parse the
-      // next Markdown chart link outside the block.
-      '',
+      '**' + marketCapText(pair) + '** · Liq ' +
+        formatCompact(pair.liquidity?.usd, { usd: true }),
+      '24h ' + movement(pair.priceChange?.h24) +
+        ' · 5m ' + movement(pair.priceChange?.m5),
+      'Price **' + formatPrice(pair.priceUsd) + '**',
       links,
     ].join('\n');
   });
