@@ -40,7 +40,7 @@ test('formats tiny token prices and safe token fields', () => {
     marketCap: 550000, priceChange: { m5: 1.5, h24: -3.2 }, url: 'https://dexscreener.com/solana/abc'
   } }], new Date('2026-11-23T00:00:00Z'));
   assert.match(embed.fields[0].value, /\$0\.01/);
-  assert.match(embed.fields[0].value, /MC \$550\.00K/);
+  assert.match(embed.fields[0].value, /MC \*\*\$550\.00K\*\*/);
   assert.doesNotMatch(embed.fields[0].name, /@/);
   assert.equal(embed.timestamp, '2026-11-23T00:00:00.000Z');
 });
