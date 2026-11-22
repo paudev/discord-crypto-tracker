@@ -302,44 +302,60 @@ function asChange(value) {if(value==null||value==="")return null;const n=Number(
 
 function formatChange(value) {const n=asChange(value);return n===null?"—":(n>0?"+":"")+n.toFixed(2)+"%";}
 
-function trendIcon(value) {const n=asChange(value);return n===null||n===0?"⚪":n>0?"🟢":"🔴";}
+// Discord colors entire embeds, not individual lines. Each token gets its own colored embed.
+function trendColor(value){const n=asChange(value);return n===null||n===0?0x5865f2:n>0?0x2ecc71:0xe74c3c;}
 
-function shortAddress(address) {const value=String(address??"");return value.length>20?value.slice(0,8)+"…"+value.slice(-6):value;}
+function shortAddress(address){const a=String(address??"");return a.length>20?a.slice(0,8)+"…"+a.slice(-6):a;}
 
-function dashboardAccent(entries) {const changes=entries.map(({pair})=>asChange(pair?.priceChange?.h24)).filter(x=>x!==null);const p=changes.filter(n=>n>0).length,negative=changes.filter(n=>n<0).length;return p>negative?0x2ecc71:negative>p?0xe74c3c:0x5865f2;}
+function dexChartUrl(pair){const url=String(pair?.url??"");return /^https:\/\/dexscreener\.com\/[a-z0-9/_-]+$/i.test(url)?url:null;}
 
-function dexChartUrl(pair) {const url=String(pair?.url??"");return /^https:\/\/dexscreener\.com\/[a-z0-9/_-]+$/i.test(url)?url:null;}
-
-export function createDashboardEmbed(entries,clock=new Date()){
- const pieces=entries.map(({token,pair,error})=>{
-  const symbol=safeText(pair?.baseToken?.symbol||token.symbol||token.name,24)||"Unknown";
-  const title=`${trendIcon(pair?.priceChange?.h24)} **${symbol}** · ${safeText(token.chain,16).toUpperCase()}`;
-  const ca=shortAddress(token.address);
-  if(!pair)return [title,`⚠️ **Market data unavailable**${error?" · API error":" · No priced pool"}`,`CA \`${ca}\``].join("\n");
+export function createDashboardEmbeds(entries,clock=new Date()){
+ const cards=entries.map(({token,pair,error})=>{
+  const symbol=safeText(pair?.baseToken?.symbol||token.symbol||token.name,24)||"Unknown token";
+  const title=`${symbol} · ${safeText(token.chain,16).toUpperCase()}`;
+  const contract=shortAddress(token.address);
+  if(!pair)return {title,color:0x5865f2,description:`**Market data unavailable**${error?" · API error":" · No priced pool"}\nCA \`${contract}\``};
   const mc=Number(pair.marketCap),fdv=Number(pair.fdv);
-  const realMC=Number.isFinite(mc)&&mc>0;
-  const realFDV=Number.isFinite(fdv)&&fdv>0;
-  const cap=realMC?formatCompact(mc,{usd:true}):realFDV?formatCompact(fdv,{usd:true}):"N/A";
-  const capLabel=realMC||!realFDV?"MC":"FDV";
-  const url=dexChartUrl(pair);
-  return [
-   title,
-   `💰 **${capLabel}: ${cap}**`,
+  const hasMC=Number.isFinite(mc)&&mc>0,hasFDV=Number.isFinite(fdv)&&fdv>0;
+  const label=hasMC||!hasFDV?"MC":"FDV";
+  const cap=hasMC?formatCompact(mc,{usd:true}):hasFDV?formatCompact(fdv,{usd:true}):"N/A";
+  const chart=dexChartUrl(pair);
+  return {title,color:trendColor(pair.priceChange?.h24),description:[
+   `**${label}: ${cap}**`,
    "",
-   `Price **${formatPrice(pair.priceUsd)}**  ·  Liquidity **${formatCompact(pair.liquidity?.usd,{usd:true})}**`,
-   `24h ${trendIcon(pair.priceChange?.h24)} **${formatChange(pair.priceChange?.h24)}**  ·  5m ${trendIcon(pair.priceChange?.m5)} ${formatChange(pair.priceChange?.m5)}`,
-   `${url?`[View chart](${url})  ·  `:""}CA \`${ca}\``,
-  ].join("\n");
+   `Price **${formatPrice(pair.priceUsd)}**  ·  Liq **${formatCompact(pair.liquidity?.usd,{usd:true})}**`,
+   `24h **${formatChange(pair.priceChange?.h24)}**  ·  5m **${formatChange(pair.priceChange?.m5)}**`,
+   `${chart?`[Chart](${chart}) · `:""}CA \`${contract}\``
+  ].join("\n")};
  });
- const details=pieces.join("\n\n────────────────────\n\n");
- return {
-  title:"📈 SpicyTracker · Crypto Markets",
-  description:`${entries.length} token${entries.length===1?"":"s"} tracked · Auto-refresh ~1 min${details?"\n\n"+details:"\n\nUse /tracker add to start tracking."}`,
-  color:dashboardAccent(entries),
-  footer:{text:"DEX Screener · Market data is indicative"},
-  timestamp:clock.toISOString()
- };
+ if(!cards.length)return [{
+  title:"SpicyTracker · Crypto Markets",
+  description:"No tracked tokens. Use `/tracker add` to get started.",
+  color:0x5865f2,
+  footer:{text:"DEX Screener · Market data is indicative"},timestamp:clock.toISOString()
+ }];
+ const groups=[];
+ if(cards.length<=10){for(const card of cards)groups.push([card]);}
+ else {
+  const pairCount=cards.length-10;
+  const singles=cards.length-2*pairCount;
+  for(let i=0;i<singles;i++)groups.push([cards[i]]);
+  for(let i=singles;i<cards.length;i+=2)groups.push(cards.slice(i,i+2));
+ }
+ const embeds=groups.map(group=>{
+  if(group.length===1)return {...group[0]};
+  return {
+   title:`${group.length} tracked tokens`,
+   color:0x5865f2,
+   description:group.map(card=>`**${card.title}**\n${card.description}`).join("\n\n────────────\n\n")
+  };
+ });
+ embeds[embeds.length-1].footer={text:"DEX Screener · Indicative market data · Updates approximately every minute"};
+ embeds[embeds.length-1].timestamp=clock.toISOString();
+ return embeds;
 }
+
+function dashboardMessageContent(count){return `**SpicyTracker · Crypto Markets**  ·  ${count} tracked token${count===1?"":"s"}`;}
 
 export async function hydrateTokenSymbols(client,store,{fetcher,entries}={}){
  const missing=store.config.tokens.filter(x=>!safeText(x.symbol,24));
@@ -357,17 +373,18 @@ export async function publishDashboard(client, store, { fetcher, now } = {}) {
   const tokens = store.config.tokens;
   const entries = await fetchAllPairs(tokens, fetcher);
   await hydrateTokenSymbols(client, store, { entries });
-  const embed = createDashboardEmbed(entries, now ? now() : new Date());
+  const embeds = createDashboardEmbeds(entries, now ? now() : new Date());
+  const content = dashboardMessageContent(tokens.length);
   const channelId = store.config.dashboardChannelId;
   let messageId = store.config.dashboardMessageId;
   if (messageId) {
     const response = await client.request(`/channels/${channelId}/messages/${messageId}`, {
-      method: 'PATCH', body: { embeds: [embed], allowed_mentions: { parse: [] } }, allow404: true,
+      method: 'PATCH', body: { content, embeds, allowed_mentions: { parse: [] } }, allow404: true,
     });
     if (response) return { updated: true, count: tokens.length, messageId };
   }
   const created = await client.request(`/channels/${channelId}/messages`, { method: 'POST', body: {
-    embeds: [embed], allowed_mentions: { parse: [] },
+    content, embeds, allowed_mentions: { parse: [] },
   } });
   messageId = created.id;
   store.config.dashboardMessageId = messageId;
