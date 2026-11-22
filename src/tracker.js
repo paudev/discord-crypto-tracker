@@ -338,7 +338,7 @@ export function createDashboardEmbeds(entries, clock = new Date()) {
   const sections = entries.map(({ token, pair, error }) => {
     const symbol = safeText(pair?.baseToken?.symbol || token.symbol || token.name, 24) || 'Unknown token';
     const chain = safeText(token.chain, 16).toUpperCase();
-    const heading = '**' + symbol + '** · ' + chain;
+    const heading = '──── **' + symbol + '** · ' + chain;
     const chart = dexChartUrl(pair);
     const links = (chart ? '[View chart ↗](' + chart + ')  ·  ' : '') +
       'CA `' + shortAddress(token.address) + '`';
@@ -358,15 +358,13 @@ export function createDashboardEmbeds(entries, clock = new Date()) {
       links,
     ].join('\n');
   });
-  const divider = '────────────';
   const tokenCount = entries.length;
   const intro = '**' + tokenCount + ' tracked token' + (tokenCount === 1 ? '' : 's') +
     '**  ·  Live DEX markets';
   return [{
     title: 'SpicyTracker · Markets',
     description: sections.length
-      ? intro + '\n' + divider + '\n' + sections.join('\n' + divider + '\n') +
-        '\n' + divider
+      ? intro + '\n' + sections.join('\n')
       : 'No tracked tokens. Use `/tracker add` to begin.',
     color: 0x5865f2,
     footer: { text: 'DEX Screener · Indicative prices · ~1 min refresh' },
@@ -404,10 +402,8 @@ export function createHighAlertEmbed(token, pair, previous, current, clock = new
     title: 'New observed market-cap high',
     description: [
       '**' + symbol + '**  ·  `' + chain + '`',
-      '',
       '**MC  ' + formatCompact(current, { usd: true }) + '**',
-      '🟩 ▲ **+' + gain.toFixed(2) + '%**  vs. previous high',
-      '',
+      '🟩 **+' + gain.toFixed(2) + '%**  vs. previous high',
       'Previous recorded MC  **' + formatCompact(previous, { usd: true }) + '**',
       'Price  **' + formatPrice(pair?.priceUsd) + '**' + (chart ? '  ·  [Chart ↗](' + chart + ')' : ''),
       'CA `' + shortAddress(token.address) + '`',

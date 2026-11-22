@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { updateObservedHighs, createHighAlertEmbed, parseConfig, serializeConfig, createStorageEmbed } from '../src/tracker.js';
+import { updateObservedHighs, createHighAlertEmbed, createDashboardEmbeds, parseConfig, serializeConfig, createStorageEmbed } from '../src/tracker.js';
+import { executeTrackerCommand } from '../src/commands.js';
+import { editInteractionResponse } from '../src/discord.js';
 
 const SOL='So11111111111111111111111111111111111111112';
 const STORE='423456789012345678', MSG='523456789012345678', ALERT='623456789012345678', DASH='723456789012345678';
@@ -120,4 +122,60 @@ test('ATH preview and real notification produce the EXACT same Discord embed',()
   assert.doesNotMatch(JSON.stringify(live),/PREVIEW|TEST ONLY|Simulated|No changes saved/i);
   assert.equal(token.h,120000);
   assert.equal(token.a,120000);
+});
+
+test('dashboard separators are inline with each token heading, without spacer rows',()=>{
+  const tokenA={chain:'solana',address:SOL,symbol:'DREAD'};
+  const tokenB={chain:'base',address:'0x'+'a'.repeat(40),symbol:'MOON'};
+  const entries=[{token:tokenA,pair:{baseToken:{symbol:'DREAD'},marketCap:120000,priceUsd:0.004,liquidity:{usd:5000},priceChange:{h24:8,m5:-2}}},
+    {token:tokenB,pair:{baseToken:{symbol:'MOON'},marketCap:32000,priceUsd:0.006,liquidity:{usd:4000},priceChange:{h24:-3,m5:1}}}];
+  const card=createDashboardEmbeds(entries)[0];
+  assert.match(card.description,/^──── \*\*DREAD\*\* · SOLANA/m);
+  assert.match(card.description,/^──── \*\*MOON\*\* · BASE/m);
+  assert.doesNotMatch(card.description,/^[-─━]{3,}$/m);
+  assert.doesNotMatch(card.description,/\n\n/);
+  assert.match(card.description,/🟩 \+8\.00%/);
+  assert.match(card.description,/🟥 -2\.00%/);
+});
+
+test('ATH preview posts and displays the exact live alert embed, with no preview-only text',async()=>{
+  const guild='923456789012345678';
+  const token={chain:'solana',address:SOL,symbol:'DREAD',h:100000,a:100000};
+  const cfg={version:1,dashboardChannelId:DASH,dashboardMessageId:null,
+    athChannelId:ALERT,athMinPct:0,tokens:[token]};
+  const posted=[];
+  const pairs=[{chainId:'solana',baseToken:{symbol:'DREAD',address:SOL},
+    priceUsd:'0.004',marketCap:125000,liquidity:{usd:12000},url:'https://dexscreener.com/solana/demo'}];
+  const client={async request(path,opts={}){
+    if(path==='/guilds/'+guild+'/channels')return [
+      {id:STORE,name:'crypto-tracker-data',type:0},
+      {id:ALERT,name:'ath-alerts',type:0},
+    ];
+    if(path==='/channels/'+STORE+'/messages?limit=100')
+      return [{id:MSG,embeds:[createStorageEmbed(cfg)]}];
+    if(path==='/channels/'+ALERT+'/messages' && opts.method==='POST'){
+      posted.push(opts.body);return {id:'999456789012345678'};
+    }
+    throw new Error('Unexpected Discord call '+path);
+  }};
+  const response=await executeTrackerCommand({
+    interaction:{guild_id:guild,channel_id:DASH,member:{permissions:'32'},
+      data:{options:[{name:'ath-preview',options:[{name:'increase',value:25}]}]}},
+    client,fetcher:async()=>({ok:true,json:async()=>pairs}),
+  });
+  assert.equal(posted.length,1);
+  assert.deepEqual(response,{embeds:posted[0].embeds});
+  assert.deepEqual(posted[0].allowed_mentions,{parse:[]});
+  assert.doesNotMatch(JSON.stringify(response),/preview|test only|simulated|no changes saved/i);
+  const exactLive=createHighAlertEmbed(token,pairs[0],100000,125000,new Date(response.embeds[0].timestamp));
+  assert.deepEqual(response.embeds[0],exactLive);
+  assert.equal(cfg.tokens[0].h,100000);
+  assert.equal(cfg.tokens[0].a,100000);
+
+  let patchBody;
+  await editInteractionResponse('123456789012345678','interaction-token',response,
+    async (_url,init)=>{patchBody=JSON.parse(init.body);return {ok:true};});
+  assert.deepEqual(patchBody.embeds,posted[0].embeds);
+  assert.equal(patchBody.content,'');
+  assert.deepEqual(patchBody.allowed_mentions,{parse:[]});
 });

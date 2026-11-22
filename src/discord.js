@@ -81,10 +81,16 @@ export function discordClient(token, fetcher = globalThis.fetch) {
 }
 
 export async function editInteractionResponse(applicationId, interactionToken, message, fetcher = globalThis.fetch) {
+  const payload = typeof message === 'string'
+    ? { content: message.slice(0, 1950) }
+    : {
+        content: typeof message?.content === 'string' ? message.content.slice(0, 1950) : '',
+        ...(Array.isArray(message?.embeds) ? { embeds: message.embeds } : {}),
+      };
   const response = await fetcher(`${DISCORD_API}/webhooks/${applicationId}/${encodeURIComponent(interactionToken)}/messages/@original`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content: String(message).slice(0, 1950), allowed_mentions: { parse: [] } }),
+    body: JSON.stringify({ ...payload, allowed_mentions: { parse: [] } }),
     signal: AbortSignal.timeout(12000),
   });
   if (!response.ok) throw new Error(`Discord interaction follow-up failed (HTTP ${response.status})`);

@@ -36,7 +36,7 @@ export const TRACKER_COMMAND = {
     ] },
     { type: SUBCOMMAND, name: 'ath-off', description: 'Disable observed market-cap alerts' },
     { type: SUBCOMMAND, name: 'ath-status', description: 'Show observed market-cap highs and alert channel' },
-    { type: SUBCOMMAND, name: 'ath-preview', description: 'Post a simulated record-high alert without changing tracked records', options: [
+    { type: SUBCOMMAND, name: 'ath-preview', description: 'Show exact live-format ATH card without changing high records', options: [
       { type: STRING, name: 'token', description: 'Tracked token symbol or contract (defaults to first token)', required: false },
       { type: CHANNEL, name: 'target', description: 'Preview destination (defaults to ATH channel or current channel)', required: false, channel_types: [0] },
       { type: NUMBER, name: 'increase', description: 'Simulated percentage gain (default 15)', required: false, min_value: 1, max_value: 100 },
@@ -47,7 +47,7 @@ export const TRACKER_COMMAND = {
 };
 
 
-const REGISTERED_COMMAND_REVISION = 2;
+const REGISTERED_COMMAND_REVISION = 3;
 
 /** Register newly added slash commands once from the existing authenticated refresh. */
 export async function syncTrackerCommandsIfNeeded(client, store, applicationId, guildId) {
@@ -83,7 +83,7 @@ const helpText = [
   '• `/tracker refresh` — fetch the latest prices now',
   '• `/tracker ath-channel target:#ath-alerts` — alert for new observed MC highs (optional min-increase)',
   '• `/tracker ath-status` — show observed highs and settings',
-  '• `/tracker ath-preview` — post a clearly labeled example alert without changing ATH records',
+  '• `/tracker ath-preview` — show the exact live alert card without changing ATH records',
   '• `/tracker ath-off` — disable alerts',
   '• `/tracker channel target:#crypto-prices` — move the public dashboard',
   '• `/tracker storage target:#my-private-channel` — choose the private storage channel; set roles/categories in Discord',
@@ -224,10 +224,10 @@ export async function executeTrackerCommand({ interaction, client, applicationId
       console.error('[tracker:ath-preview] Failed to send simulated alert', error.message);
       return 'Could not send the preview. Give SpicyTracker View Channel, Send Messages and Embed Links in the selected channel.';
     }
-    return 'Preview sent to <#' + targetId + '> for **' +
-      (safeText(pair.baseToken?.symbol || token.symbol, 24) || 'token') +
-      '** with a simulated +' + increase.toFixed(2) +
-      '% gain. This was only a test; no recorded highs or alert settings changed.';
+    // Display the identical alert embed in the ephemeral command response too.
+    // Previously Discord showed only a "Preview sent" text confirmation here,
+    // making the real card hard to inspect when it posted in another channel.
+    return { embeds: [embed] };
   }
 
   if (command.name === 'list') {
