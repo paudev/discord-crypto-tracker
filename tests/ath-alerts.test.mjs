@@ -237,3 +237,18 @@ test('DREAD simulation uses historical $48.7K, not current $31K, without mutatin
   assert.equal(token.h,31000);
   assert.equal(token.b,48700);
 });
+
+test('twelve tokens can store manual ATHs and cooldown timestamps within embed limits',()=>{
+  const config={version:1,dashboardChannelId:DASH,dashboardMessageId:MSG,
+    athChannelId:ALERT,athMinPct:5,cv:4,
+    tokens:Array.from({length:12},(_,i)=>({
+      chain:'solana',address:SOL.slice(0,-2)+String(i).padStart(2,'0'),
+      symbol:'LONGSYMBOLFORCOINTESTXXX',
+      h:123456789.12,a:123456789.12,b:123456789.12,t:1795387904,
+    }))};
+  const serialized=serializeConfig(config);
+  assert.ok(serialized.length>2000);
+  assert.ok(serialized.length<=3000);
+  assert.equal(parseConfig(serialized)?.tokens.length,12);
+  assert.ok(createStorageEmbed(config).description.length<=4096);
+});
