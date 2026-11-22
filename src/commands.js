@@ -4,6 +4,7 @@ import { cleanupStores, hydrateTokenSymbols, loadStore, publishDashboard, saveSt
 
 const STRING = 3;
 const CHANNEL = 7;
+const NUMBER = 10;
 const SUBCOMMAND = 1;
 
 export const TRACKER_COMMAND = {
@@ -29,6 +30,12 @@ export const TRACKER_COMMAND = {
     { type: SUBCOMMAND, name: 'storage', description: 'Choose an existing private text channel for tracker data', options: [
       { type: CHANNEL, name: 'target', description: 'Your private data channel (move it and set role permissions in Discord)', required: true, channel_types: [0] },
     ] },
+    { type: SUBCOMMAND, name: 'ath-channel', description: 'Send observed market-cap high alerts to a text channel', options: [
+      { type: CHANNEL, name: 'target', description: 'Destination for new observed market-cap highs', required: true, channel_types: [0] },
+      { type: NUMBER, name: 'min-increase', description: 'Percent increase above last alert (default 0)', required: false, min_value: 0, max_value: 100 },
+    ] },
+    { type: SUBCOMMAND, name: 'ath-off', description: 'Disable observed market-cap alerts' },
+    { type: SUBCOMMAND, name: 'ath-status', description: 'Show observed market-cap highs and alert channel' },
     { type: SUBCOMMAND, name: 'cleanup', description: 'Safely remove redundant bot-created data channels' },
     { type: SUBCOMMAND, name: 'help', description: 'Show tracker commands and setup instructions' },
   ],
@@ -48,6 +55,9 @@ const helpText = [
   '• `/tracker remove address:<CA>` — stop tracking a token',
   '• `/tracker list` — list all tracked tokens',
   '• `/tracker refresh` — fetch the latest prices now',
+  '• `/tracker ath-channel target:#ath-alerts` — alert for new observed MC highs (optional min-increase)',
+  '• `/tracker ath-status` — show observed highs and settings',
+  '• `/tracker ath-off` — disable alerts',
   '• `/tracker channel target:#crypto-prices` — move the public dashboard',
   '• `/tracker storage target:#my-private-channel` — choose the private storage channel; set roles/categories in Discord',
   '• `/tracker cleanup` — merge watchlists and remove safe duplicate bot-created storage channels',
@@ -89,7 +99,12 @@ export async function executeTrackerCommand({ interaction, client, applicationId
     if (!store) return 'No data channel configured. Create a private text channel, then run `/tracker storage target:#your-private-channel` before adding tokens.';
     if (store.config.tokens.some(x => x.chain === token.chain && x.address === token.address)) return 'That token is already being tracked.';
     if (store.config.tokens.length >= MAX_TOKENS) return `This dashboard supports a maximum of ${MAX_TOKENS} tokens.`;
-    store.config.tokens.push({ ...token, symbol: safeText(pair.baseToken?.symbol, 24) || undefined });
+    const initialMc = Number(pair.marketCap);
+    const baseline = pair.marketCap != null && Number.isFinite(initialMc) && initialMc > 0 ? initialMc : null;
+    store.config.tokens.push({
+      ...token, symbol: safeText(pair.baseToken?.symbol, 24) || undefined,
+      ...(baseline === null ? {} : { h: baseline, a: baseline }),
+    });
     await saveStore(client, store);
     try {
       await publishDashboard(client, store, { fetcher });
@@ -104,6 +119,41 @@ export async function executeTrackerCommand({ interaction, client, applicationId
   if (!store) return 'No watchlist configured. Create a private text channel and run `/tracker storage target:#your-private-channel` to initialize storage.';
   // Upgrade legacy raw JSON storage to a readable embed without posting to the price dashboard.
   if (store.needsMigration) await saveStore(client, store);
+
+  if (command.name === 'ath-channel') {
+    const channelId = optionValue(command, 'target');
+    const requested = optionValue(command, 'min-increase');
+    const minPct = requested == null ? 0 : Number(requested);
+    if (!/^\d{16,22}$/.test(String(channelId ?? ''))) return 'Select a valid text channel.';
+    if (channelId === store.configChannelId) return 'Choose a different channel from private storage.';
+    if (!Number.isFinite(minPct) || minPct < 0 || minPct > 100) return 'Minimum increase must be 0-100%.';
+    const channels = await client.request('/guilds/' + guildId + '/channels');
+    if (!Array.isArray(channels) || !channels.some(c => c.id === channelId && c.type === 0)) {
+      return 'Select an existing text channel in this server that SpicyTracker can view.';
+    }
+    store.config.athChannelId = channelId;
+    store.config.athMinPct = minPct;
+    await saveStore(client, store);
+    return '✅ Observed-high alerts enabled in <#' + channelId + '> with a ' + minPct + '% minimum increase. These are sampled records since tracking began, not verified lifetime ATHs. Allow View Channel, Send Messages, Embed Links.';
+  }
+  if (command.name === 'ath-off') {
+    store.config.athChannelId = null;
+    await saveStore(client, store);
+    return '✅ Observed market-cap high alerts disabled. Saved high records remain.';
+  }
+  if (command.name === 'ath-status') {
+    const target = store.config.athChannelId ? '<#' + store.config.athChannelId + '>' : 'Disabled';
+    const lines = store.config.tokens.map(t => {
+      const high = Number(t.h);
+      return (safeText(t.symbol || t.name, 24) || 'Unknown') + ' · ' + t.chain.toUpperCase() +
+        ': ' + (Number.isFinite(high) && high > 0 ? '$' + high.toLocaleString('en-US', { maximumFractionDigits: 2 }) : 'Not sampled yet');
+    });
+    return 'Observed market-cap highs\nChannel: ' + target +
+      '\nMinimum increase: ' + (store.config.athMinPct ?? 0) + '%' +
+      '\n' + (lines.join('\n') || 'No tracked tokens') +
+      '\nHighs are sampled since tracking began; not verified lifetime ATHs.';
+  }
+
   if (command.name === 'list') {
     await hydrateTokenSymbols(client, store, { fetcher });
     if (!store.config.tokens.length) return `No tokens tracked yet. Dashboard: <#${store.config.dashboardChannelId}>.`;

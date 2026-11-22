@@ -335,3 +335,50 @@ test('legacy tokens gain their DEX ticker on refresh without posting extra messa
  assert.match(client.messages.get(PRIVATE)[0].embeds[0].description,/\*\*SOL\*\*/);
  assert.equal(client.messages.get(GENERAL).length,1);
 });
+
+
+test('ATH channel command stores a selected existing text channel without creating one',async()=>{
+  const client=createFakeDiscord();
+  const ALERTS='623456789012345678';
+  client.channels.push({id:ALERTS,type:0,name:'market-cap-alerts'});
+  await executeTrackerCommand({interaction:interaction('storage',[opt('target',PRIVATE)]),client,applicationId:APP});
+  const response=await executeTrackerCommand({interaction:interaction('ath-channel',[
+    opt('target',ALERTS),opt('min-increase',5)
+  ]),client,applicationId:APP});
+  assert.match(response,/alerts enabled/);
+  const store=await loadStore(client,GUILD);
+  assert.equal(store.config.athChannelId,ALERTS);
+  assert.equal(store.config.athMinPct,5);
+  assert.equal(client.log.filter(x=>x.method==='POST'&&x.path==='/guilds/'+GUILD+'/channels').length,0);
+  const status=await executeTrackerCommand({interaction:interaction('ath-status'),client,applicationId:APP});
+  assert.match(status,/Minimum increase: 5%/);
+  const disabled=await executeTrackerCommand({interaction:interaction('ath-off'),client,applicationId:APP});
+  assert.match(disabled,/disabled/);
+  assert.equal((await loadStore(client,GUILD)).config.athChannelId,null);
+});
+test('ATH channel command rejects private storage and invalid percentage',async()=>{
+  const client=createFakeDiscord();
+  await executeTrackerCommand({interaction:interaction('storage',[opt('target',PRIVATE)]),client,applicationId:APP});
+  const wrong=await executeTrackerCommand({interaction:interaction('ath-channel',[opt('target',PRIVATE)]),client,applicationId:APP});
+  assert.match(wrong,/different channel/);
+  const tooLarge=await executeTrackerCommand({interaction:interaction('ath-channel',[
+    opt('target',GENERAL),opt('min-increase',101)
+  ]),client,applicationId:APP});
+  assert.match(tooLarge,/0-100%/);
+  assert.equal((await loadStore(client,GUILD)).config.athChannelId,undefined);
+});
+test('adding a token with market cap seeds observed baseline without instant alert',async()=>{
+  const client=createFakeDiscord();
+  await executeTrackerCommand({interaction:interaction('storage',[opt('target',PRIVATE)]),client,applicationId:APP});
+  const fetcher=()=>({ok:true,json:async()=>[{
+    chainId:'solana',baseToken:{address:SOL,symbol:'SOL'},
+    priceUsd:'0.001',marketCap:123456,liquidity:{usd:90000}
+  }]});
+  const result=await executeTrackerCommand({interaction:interaction('add',[
+    opt('chain','solana'),opt('address',SOL)
+  ]),client,applicationId:APP,fetcher});
+  assert.match(result,/Added/);
+  const token=(await loadStore(client,GUILD)).config.tokens[0];
+  assert.equal(token.h,123456);
+  assert.equal(token.a,123456);
+});

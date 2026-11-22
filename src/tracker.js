@@ -29,6 +29,8 @@ export function parseConfig(input) {
       if (data.version !== 1 || !Array.isArray(data.tokens) || data.tokens.length > MAX_TOKENS) continue;
       if (!/^\d{16,22}$/.test(data.dashboardChannelId)) continue;
       if (data.dashboardMessageId && !/^\d{16,22}$/.test(data.dashboardMessageId)) continue;
+      if (data.athChannelId != null && !/^\d{16,22}$/.test(data.athChannelId)) continue;
+      if (data.athMinPct != null && (!Number.isFinite(data.athMinPct) || data.athMinPct < 0 || data.athMinPct > 100)) continue;
       return data;
     } catch {
       continue;
@@ -64,6 +66,7 @@ export function createStorageEmbed(config) {
       "This message stores your tracker settings. You can move this channel or restrict who can see it.",
       "",
       `**Tracked tokens**  **${tokens.length} / ${MAX_TOKENS}**   ·   **Price dashboard**  <#${config.dashboardChannelId}>`,
+      `**Observed-high alerts**  ${config.athChannelId ? `<#${config.athChannelId}>` : 'Off'}`,
       "",
       "**Watchlist**",
       listing,
@@ -321,8 +324,8 @@ function marketCapText(pair){const mc=Number(pair?.marketCap),fdv=Number(pair?.f
 function priceAction(value){
  const n=asChange(value);
  if(n===null)return "—";
- if(n>0)return "📈 "+formatChange(n);
- if(n<0)return "📉 "+formatChange(n);
+ if(n>0)return "⬆️ "+formatChange(n);
+ if(n<0)return "⬇️ "+formatChange(n);
  return "➖ "+formatChange(n);
 }
 
@@ -368,10 +371,82 @@ export async function hydrateTokenSymbols(client,store,{fetcher,entries}={}){
  return changed;
 }
 
+
+/** DEX Screener's free endpoint provides current MC, not verified historical ATH. */
+function observedMarketCap(pair) {
+  if (pair?.marketCap == null || pair.marketCap === '') return null;
+  const mc = Number(pair.marketCap);
+  return Number.isFinite(mc) && mc > 0 ? mc : null;
+}
+function createHighAlertEmbed(token, pair, previous, current, clock = new Date()) {
+  const symbol = safeText(pair?.baseToken?.symbol || token.symbol, 24) || 'Unknown token';
+  const chain = safeText(token.chain, 16).toUpperCase();
+  const growth = (current / previous - 1) * 100;
+  const chart = dexChartUrl(pair);
+  return {
+    title: '⬆️ New observed market-cap high',
+    description: [
+      '**' + symbol + '** · ' + chain,
+      '',
+      '**MC ' + formatCompact(current, { usd: true }) + '**  ·  ⬆️ +' + growth.toFixed(2) + '%',
+      'Previous recorded high: **' + formatCompact(previous, { usd: true }) + '**',
+      'Price ' + formatPrice(pair?.priceUsd) + (chart ? '  ·  [View chart ↗](' + chart + ')' : ''),
+      'CA ' + String.fromCharCode(96) + shortAddress(token.address) + String.fromCharCode(96),
+    ].join('\n'),
+    color: 0x22c55e,
+    footer: { text: 'Highest observed since tracking began · Not verified lifetime ATH · DEX Screener' },
+    timestamp: clock.toISOString(),
+  };
+}
+export async function updateObservedHighs(client, store, entries, { now } = {}) {
+  let changed = false, alerts = 0;
+  const configured = Number(store.config.athMinPct);
+  const minimumPct = Number.isFinite(configured) && configured >= 0 ? configured : 0;
+  const channelId = store.config.athChannelId;
+  const clock = typeof now === 'function' ? now() : new Date();
+  for (const { token, pair } of entries) {
+    const marketCap = observedMarketCap(pair);
+    if (marketCap === null) continue;
+    const previous = Number(token.h);
+    if (!Number.isFinite(previous) || previous <= 0) {
+      token.h = marketCap;
+      token.a = marketCap;
+      changed = true;
+      continue;
+    }
+    const lastNotified = Number(token.a);
+    if (!Number.isFinite(lastNotified) || lastNotified <= 0) {
+      token.a = previous;
+      changed = true;
+    }
+    if (marketCap <= previous) continue;
+    const alertBaseline = Number(token.a) || previous;
+    const eligible = Boolean(channelId) && marketCap > alertBaseline
+      && ((marketCap / alertBaseline - 1) * 100 + 1e-9) >= minimumPct;
+    token.h = marketCap;
+    changed = true;
+    if (!eligible) continue;
+    try {
+      await client.request('/channels/' + channelId + '/messages', {
+        method: 'POST',
+        body: { embeds: [createHighAlertEmbed(token, pair, previous, marketCap, clock)], allowed_mentions: { parse: [] } },
+      });
+      token.a = marketCap;
+      alerts++;
+    } catch (error) {
+      token.h = previous;
+      console.error('[tracker:ath] Alert could not be posted for', token.chain, error.message);
+    }
+  }
+  if (changed) await saveStore(client, store);
+  return { alerts, athEnabled: Boolean(channelId) };
+}
+
 export async function publishDashboard(client, store, { fetcher, now } = {}) {
   const tokens = store.config.tokens;
   const entries = await fetchAllPairs(tokens, fetcher);
   await hydrateTokenSymbols(client, store, { entries });
+  const highs = await updateObservedHighs(client, store, entries, { now });
   const embeds = createDashboardEmbeds(entries, now ? now() : new Date());
   const content = dashboardMessageContent(tokens.length);
   const channelId = store.config.dashboardChannelId;
@@ -380,7 +455,7 @@ export async function publishDashboard(client, store, { fetcher, now } = {}) {
     const response = await client.request(`/channels/${channelId}/messages/${messageId}`, {
       method: 'PATCH', body: { content, embeds, allowed_mentions: { parse: [] } }, allow404: true,
     });
-    if (response) return { updated: true, count: tokens.length, messageId };
+    if (response) return { updated: true, count: tokens.length, messageId, ...highs };
   }
   const created = await client.request(`/channels/${channelId}/messages`, { method: 'POST', body: {
     content, embeds, allowed_mentions: { parse: [] },
@@ -388,5 +463,5 @@ export async function publishDashboard(client, store, { fetcher, now } = {}) {
   messageId = created.id;
   store.config.dashboardMessageId = messageId;
   await saveStore(client, store);
-  return { created: true, count: tokens.length, messageId };
+  return { created: true, count: tokens.length, messageId, ...highs };
 }
