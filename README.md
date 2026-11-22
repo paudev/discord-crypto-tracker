@@ -155,7 +155,7 @@ The bot can send a **new message** to a server-manager-selected text channel whe
 - `/tracker ath-status` shows the destination, threshold, and each tracked token's observed high.
 - `/tracker ath-preview` posts **one simulated alert** using the first tracked token, the latest DEX Screener market cap, and a fictional previous high that makes the current market cap exactly 15% higher. It defaults to the configured ATH channel or the channel where you run the command. It works even if real ATH alerts are disabled.
 - `/tracker ath-preview token:DREAD increase:20` previews a specific tracked symbol with a simulated 20% increase. You can also supply a tracked contract address in `token` and optionally choose a `target` text channel. If multiple tokens share a symbol, use the contract.
-- Preview messages are visibly labeled **PREVIEW / TEST ONLY** and **never update** stored highs, dashboard messages or notification settings.
+- Preview messages use **exactly the same card as live ATH alerts**—identical title, color, body, and footer—with **no preview labels inside the channel message**. The private slash-command response states it was simulated. Previews **never update** recorded highs, the price dashboard, or alert settings.
 - `/tracker ath-off` disables new alerts but preserves recorded highs.
 
 Alerts default to **off** until you choose a destination. The **first valid market-cap sample** for existing/legacy tokens establishes a baseline silently. When adding a new token, the live market cap is used as its baseline if present. The one-minute Cloudflare refresh records new highs in the private Discord storage message and posts alerts to the configured destination with bot View Channel, Send Messages and Embed Links permissions. Existing dashboard publishing still edits the same dashboard message. Failed alert deliveries are retried on a later sample without crashing dashboard updates. The saved internal keys `h` and `a` represent sampled high and last-notified high to remain within Discord's storage-message length limit for 12 tokens.
@@ -172,8 +172,12 @@ For **24h and 5m**: increases use **🟩 +N%**, decreases use **🟥 -N%**. One 
 
 ## Preview security and permissions
 
-The ATH preview only fetches the selected token's live current pair and market cap to construct a **simulated** high. It posts a labeled test embed with Discord `allowed_mentions.parse=[]`, does not update `h`/`a`, and never changes the normal dashboard. Its destination must be an existing guild text channel (not private storage), and SpicyTracker needs View Channel, Send Messages and Embed Links permissions. If no target is supplied, it uses the configured ATH channel, otherwise the calling channel. The simulated percentage defaults to 15% and accepts values from 1 to 100%.
+The ATH preview only fetches the selected token's live current pair and market cap to construct a **simulated** high. It posts the exact live ATH embed with Discord `allowed_mentions.parse=[]`, does not update `h`/`a`, and never changes the normal dashboard. Its destination must be an existing guild text channel (not private storage), and SpicyTracker needs View Channel, Send Messages and Embed Links permissions. If no target is supplied, it uses the configured ATH channel, otherwise the calling channel. The simulated percentage defaults to 15% and accepts values from 1 to 100%.
 
 ### Latest dashboard layout note
 
 Aesthetic regression rule: do not combine a colored square with ▲/▼; this previously caused confusing wraps in Discord. Prefer a single green/red marker beside a signed percentage, short separators, real markdown headers for dynamic tokens, and no extra dashboard posts. ATH notifications remain independently configurable through `/tracker ath-channel` and `/tracker ath-preview`.
+
+### Visual regression: exact alert preview and compact separators
+
+The ATH preview must share the exact `createHighAlertEmbed` formatter with real record notifications. Do not introduce `preview` styling, `TEST ONLY` lines, a different color, or a different footer in the channel card. Only the ephemeral slash-command acknowledgment identifies the simulation; beware observers may interpret a preview card as a real alert, so use a restricted test channel when appropriate. The market-watch embed preserves opening, middle and closing separators but joins them to adjacent token sections with a **single newline**, with bold inline token names rather than `###` Markdown headings that create wide vertical gaps.

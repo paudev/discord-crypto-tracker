@@ -384,7 +384,7 @@ test('adding a token with market cap seeds observed baseline without instant ale
 });
 
 
-test('ATH preview posts one clearly marked test to selected alert channel without updating highs',async()=>{
+test('ATH preview posts the real-looking ATH card to selected channel without updating highs',async()=>{
   const client=createFakeDiscord();
   const ALERTS='623456789012345678';
   client.channels.push({id:ALERTS,type:0,name:'ath-alerts'});
@@ -404,8 +404,9 @@ test('ATH preview posts one clearly marked test to selected alert channel withou
   assert.match(reply,/simulated \+20\.00%/);
   const preview=client.messages.get(ALERTS);
   assert.equal(preview.length,1);
-  assert.match(preview[0].embeds[0].title,/PREVIEW/);
-  assert.match(preview[0].embeds[0].description,/TEST ONLY/);
+  assert.equal(preview[0].embeds[0].title,'New observed market-cap high');
+  assert.equal(preview[0].embeds[0].color,0x22c55e);
+  assert.doesNotMatch(JSON.stringify(preview[0].embeds[0]),/PREVIEW|TEST ONLY|Simulated|No changes saved/i);
   assert.match(preview[0].embeds[0].description,/\+20\.00%/);
   assert.deepEqual(preview[0].allowed_mentions.parse,[]);
   assert.equal(JSON.stringify((await loadStore(client,GUILD)).config),before);
@@ -426,7 +427,7 @@ test('ATH preview works without alert setup in command channel and supports cont
   ]),client,applicationId:APP,fetcher:live});
   assert.match(reply,/Preview sent/);
   assert.equal(client.messages.get(GENERAL).length,before+1);
-  assert.match(client.messages.get(GENERAL)[0].embeds[0].footer.text,/PREVIEW ONLY/);
+  assert.equal(client.messages.get(GENERAL)[0].embeds[0].footer.text,'Highest observed since tracking began · Not verified lifetime ATH · DEX Screener');
   assert.equal((await loadStore(client,GUILD)).config.athChannelId,undefined);
 });
 

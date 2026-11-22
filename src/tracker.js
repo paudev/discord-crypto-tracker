@@ -338,7 +338,7 @@ export function createDashboardEmbeds(entries, clock = new Date()) {
   const sections = entries.map(({ token, pair, error }) => {
     const symbol = safeText(pair?.baseToken?.symbol || token.symbol || token.name, 24) || 'Unknown token';
     const chain = safeText(token.chain, 16).toUpperCase();
-    const heading = '### ' + symbol + ' · ' + chain;
+    const heading = '**' + symbol + '** · ' + chain;
     const chart = dexChartUrl(pair);
     const links = (chart ? '[View chart ↗](' + chart + ')  ·  ' : '') +
       'CA `' + shortAddress(token.address) + '`';
@@ -365,8 +365,8 @@ export function createDashboardEmbeds(entries, clock = new Date()) {
   return [{
     title: 'SpicyTracker · Markets',
     description: sections.length
-      ? intro + '\n\n' + divider + '\n\n' + sections.join('\n\n' + divider + '\n\n') +
-        '\n\n' + divider
+      ? intro + '\n' + divider + '\n' + sections.join('\n' + divider + '\n') +
+        '\n' + divider
       : 'No tracked tokens. Use `/tracker add` to begin.',
     color: 0x5865f2,
     footer: { text: 'DEX Screener · Indicative prices · ~1 min refresh' },
@@ -395,14 +395,13 @@ function observedMarketCap(pair) {
   const mc = Number(pair.marketCap);
   return Number.isFinite(mc) && mc > 0 ? mc : null;
 }
-export function createHighAlertEmbed(token, pair, previous, current, clock = new Date(), { preview = false } = {}) {
+export function createHighAlertEmbed(token, pair, previous, current, clock = new Date()) {
   const symbol = safeText(pair?.baseToken?.symbol || token.symbol, 24) || 'Unknown token';
   const chain = safeText(token.chain, 16).toUpperCase();
   const gain = (current / previous - 1) * 100;
   const chart = dexChartUrl(pair);
-  const title = preview ? 'PREVIEW  ·  New observed MC high' : 'New observed market-cap high';
   return {
-    title,
+    title: 'New observed market-cap high',
     description: [
       '**' + symbol + '**  ·  `' + chain + '`',
       '',
@@ -412,14 +411,9 @@ export function createHighAlertEmbed(token, pair, previous, current, clock = new
       'Previous recorded MC  **' + formatCompact(previous, { usd: true }) + '**',
       'Price  **' + formatPrice(pair?.priceUsd) + '**' + (chart ? '  ·  [Chart ↗](' + chart + ')' : ''),
       'CA `' + shortAddress(token.address) + '`',
-      ...(preview ? ['', '**TEST ONLY**  ·  No market-cap records were modified'] : []),
     ].join('\n'),
-    color: preview ? 0x5865f2 : 0x22c55e,
-    footer: {
-      text: preview
-        ? 'PREVIEW ONLY · Simulated MC record · No changes saved'
-        : 'Highest observed since tracking began · Not verified lifetime ATH · DEX Screener',
-    },
+    color: 0x22c55e,
+    footer: { text: 'Highest observed since tracking began · Not verified lifetime ATH · DEX Screener' },
     timestamp: clock.toISOString(),
   };
 }

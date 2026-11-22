@@ -50,7 +50,10 @@ test("three tracked tokens retain color, direction emojis, readable spacing and 
   assert.match(d,/^\*\*3 tracked tokens\*\*  ·  Live DEX markets/);
   assert.equal(d.split('────────────').length-1,4);
   assert.ok(d.endsWith('────────────'));
-  assert.ok(d.indexOf('### DREAD')<d.indexOf('### CoT')&&d.indexOf('### CoT')<d.indexOf('### REALM'));
+  assert.match(d, /Live DEX markets\n────────────\n\*\*DREAD\*\*/);
+  assert.match(d, /CA `So111111…111112`\n────────────\n\*\*CoT\*\*/);
+  assert.doesNotMatch(d, /\n\n────────────|────────────\n\n/);
+  assert.ok(d.indexOf('**DREAD**')<d.indexOf('**CoT**')&&d.indexOf('**CoT**')<d.indexOf('**REALM**'));
   assert.match(d,/\*\*MC \$29\.82K\*\*/);
   assert.match(d,/24h \*\*🟩 \+16\.76%\*\*  ·  5m \*\*🟥 -3\.90%\*\*/);
   assert.match(d,/24h \*\*🟥 -2\.00%\*\*  ·  5m \*\*🟩 \+0\.36%\*\*/);
@@ -64,7 +67,7 @@ test("three tracked tokens retain color, direction emojis, readable spacing and 
 
 test("dynamically added token has correct label without token-specific emojis", function testDynamic(){
   const e=createDashboardEmbeds([{token:{chain:'base',address:ETH,symbol:'FUTURECOIN'},pair:{baseToken:{symbol:'FUTURECOIN'},marketCap:37500,priceUsd:0.5,priceChange:{h24:-7,m5:0}}}])[0];
-  assert.match(e.description,/### FUTURECOIN · BASE/);
+  assert.match(e.description,/\*\*FUTURECOIN\*\* · BASE/);
   assert.equal(e.description.split('────────────').length-1,2);
   assert.match(e.description,/24h \*\*🟥 -7\.00%\*\*  ·  5m \*\*0\.00%\*\*/);
 });
@@ -82,7 +85,7 @@ test("twelve links and separators fit in a single Discord embed", function testL
 
 test("unavailable DEX data is readable", function testNoPair(){
  const e=createDashboardEmbeds([{token:{chain:'solana',address:SOL,symbol:'NEWCOIN'},pair:null,error:'timeout'}])[0];
- assert.match(e.description,/### NEWCOIN/);
+ assert.match(e.description,/\*\*NEWCOIN\*\*/);
  assert.match(e.description,/Market data unavailable · API error/);
  assert.equal(e.description.split('────────────').length-1,2);
 });
@@ -128,7 +131,7 @@ test('dashboard uses native Discord headers and a single compact movement marker
   {token:{chain:'base',address:ETH},pair:{baseToken:{symbol:'MYSTERY-COIN'},marketCap:190000,priceUsd:'0.02',priceChange:{h24:7.2,m5:-1.25}}}
  ])[0];
  assert.equal(e.title,'SpicyTracker · Markets');
- assert.match(e.description,/### MYSTERY-COIN · BASE/);
+ assert.match(e.description,/\*\*MYSTERY-COIN\*\* · BASE/);
  assert.match(e.description,/24h \*\*🟩 \+7\.20%\*\*  ·  5m \*\*🟥 -1\.25%\*\*/);
  assert.doesNotMatch(e.description,/🟩 ▲|🟥 ▼|➖|📈|📉/u);
  assert.equal(e.description.split('────────────').length-1,2);

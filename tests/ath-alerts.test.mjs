@@ -104,16 +104,20 @@ test('twelve tokens with stored highs fit private Discord configuration limits',
   assert.equal(parseConfig(saved)?.tokens.length,12);
   assert.ok(createStorageEmbed(config).description.length<=4096);
 });
-test('simulated ATH preview is visibly labeled and leaves records unchanged',()=>{
+test('ATH preview and real notification produce the EXACT same Discord embed',()=>{
   const token={chain:'solana',address:SOL,symbol:'DREAD',h:120000,a:120000};
   const pair={baseToken:{symbol:'DREAD'},priceUsd:'0.004',marketCap:125000,url:'https://dexscreener.com/solana/demo'};
-  const embed=createHighAlertEmbed(token,pair,100000,125000,new Date('2026-11-23T01:02:00Z'),{preview:true});
-  assert.match(embed.title,/PREVIEW/);
-  assert.match(embed.description,/MC  \$125\.00K/);
-  assert.match(embed.description,/TEST ONLY/);
-  assert.match(embed.description,/\+25\.00%/);
-  assert.match(embed.footer.text,/Simulated/);
-  assert.equal(embed.color,0x5865f2);
+  const clock=new Date('2026-11-23T01:02:00Z');
+  const previous=100000, current=125000;
+  const live=createHighAlertEmbed(token,pair,previous,current,clock);
+  const simulation=createHighAlertEmbed(token,pair,previous,current,clock);
+  assert.deepEqual(simulation,live);
+  assert.equal(live.title,'New observed market-cap high');
+  assert.equal(live.color,0x22c55e);
+  assert.match(live.description,/MC  \$125\.00K/);
+  assert.match(live.description,/\+25\.00%/);
+  assert.match(live.footer.text,/Not verified lifetime ATH/);
+  assert.doesNotMatch(JSON.stringify(live),/PREVIEW|TEST ONLY|Simulated|No changes saved/i);
   assert.equal(token.h,120000);
   assert.equal(token.a,120000);
 });

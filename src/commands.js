@@ -214,7 +214,7 @@ export async function executeTrackerCommand({ interaction, client, applicationId
       return 'A live market cap is unavailable for that token. Try another tracked token.';
     }
     const previous = current / (1 + increase / 100);
-    const embed = createHighAlertEmbed(token, pair, previous, current, new Date(), { preview: true });
+    const embed = createHighAlertEmbed(token, pair, previous, current, new Date());
     try {
       await client.request('/channels/' + targetId + '/messages', {
         method: 'POST',
