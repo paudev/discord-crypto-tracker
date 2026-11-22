@@ -86,7 +86,8 @@ const helpText = [
   '• `/tracker list` — list all tracked tokens',
   '• `/tracker refresh` — fetch the latest prices now',
   '• `/tracker ath-channel target:#ath-alerts` — alert for new observed MC highs (optional min-increase)',
-  '• `/tracker ath-status` — show observed highs and settings',
+  '• `/tracker ath-status` — show sampled highs and ATH reference',
+  '• `/tracker ath-set token:DREAD market-cap:48700` — save historical ATH reference',
   '• `/tracker ath-preview` — show the exact live alert card without changing ATH records',
   '• `/tracker ath-off` — disable alerts',
   '• `/tracker channel target:#crypto-prices` — move the public dashboard',
@@ -97,6 +98,12 @@ const helpText = [
 
 function optionValue(subcommand, name) {
   return subcommand.options?.find(x => x.name === name)?.value;
+}
+
+function findTracked(tokens,value) {
+  const term=String(value||'').trim().toLowerCase();
+  return term?tokens.filter(t=>String(t.address).toLowerCase()===term||
+    String(t.symbol||'').toLowerCase()===term):[];
 }
 
 export async function executeTrackerCommand({ interaction, client, applicationId, fetcher }) {
@@ -176,15 +183,30 @@ export async function executeTrackerCommand({ interaction, client, applicationId
     const target = store.config.athChannelId ? '<#' + store.config.athChannelId + '>' : 'Disabled';
     const lines = store.config.tokens.map(t => {
       const high = Number(t.h);
-      return (safeText(t.symbol || t.name, 24) || 'Unknown') + ' · ' + t.chain.toUpperCase() +
-        ': ' + (Number.isFinite(high) && high > 0 ? '$' + high.toLocaleString('en-US', { maximumFractionDigits: 2 }) : 'Not sampled yet');
+      const reference=Number(t.b);
+      return (safeText(t.symbol||t.name,24)||'Unknown')+' · '+t.chain.toUpperCase()+
+        ': observed '+(Number.isFinite(high)&&high>0?'$'+high.toLocaleString('en-US',{maximumFractionDigits:2}):'not sampled')+
+        (Number.isFinite(reference)&&reference>0?' · entered ATH $'+reference.toLocaleString('en-US',{maximumFractionDigits:2}):'');
     });
     return 'Observed market-cap highs\nChannel: ' + target +
-      '\nMinimum increase: ' + (store.config.athMinPct ?? 0) + '%' +
+      '\nMinimum increase: ' + Math.max(5,store.config.athMinPct??0) + '% · Cooldown: 30 minutes' +
       '\n' + (lines.join('\n') || 'No tracked tokens') +
-      '\nHighs are sampled since tracking began; not verified lifetime ATHs.';
+      '\nObserved highs are sampled; manually entered ATHs are not independently verified.';
   }
 
+
+  if (command.name === 'ath-set') {
+    const matches=findTracked(store.config.tokens,optionValue(command,'token'));
+    if(!matches.length)return 'No matching tracked token. Supply its symbol or contract address.';
+    if(matches.length>1)return 'Multiple tracked tokens share that symbol; use the contract address.';
+    const value=Number(optionValue(command,'market-cap'));
+    if(!Number.isFinite(value)||value<=0||value>1e15)return 'Invalid market cap amount in USD.';
+    matches[0].b=value;
+    await saveStore(client,store);
+    return 'Historical ATH reference saved: $'+value.toLocaleString('en-US')+
+      ' for '+(safeText(matches[0].symbol,24)||'token')+
+      '. This user-entered value is not independently verified.';
+  }
 
   if (command.name === 'ath-preview') {
     const search = String(optionValue(command, 'token') || '').trim().toLowerCase();
@@ -199,10 +221,7 @@ export async function executeTrackerCommand({ interaction, client, applicationId
       return 'Choose an existing text channel in this server.';
     }
     if (!store.config.tokens.length) return 'Track a token first with /tracker add.';
-    const matches = search
-      ? store.config.tokens.filter(t =>
-          String(t.address).toLowerCase() === search || String(t.symbol || '').toLowerCase() === search)
-      : [store.config.tokens[0]];
+    const matches=search?findTracked(store.config.tokens,search):[store.config.tokens[0]];
     if (!matches.length) return 'No matching tracked token. Provide a symbol or contract address from /tracker list.';
     if (matches.length > 1) return 'Multiple tracked tokens share that symbol. Specify the contract address.';
     const token = matches[0];
@@ -213,12 +232,17 @@ export async function executeTrackerCommand({ interaction, client, applicationId
       console.error('[tracker:ath-preview] Live price lookup failed', error.message);
       return 'Unable to load a live price for the preview right now. Try again shortly.';
     }
-    const current = pair?.marketCap == null ? null : Number(pair.marketCap);
-    if (!Number.isFinite(current) || current <= 0) {
-      return 'A live market cap is unavailable for that token. Try another tracked token.';
+    const liveMc=pair?.marketCap==null?null:Number(pair.marketCap);
+    if(!Number.isFinite(liveMc)||liveMc<=0){
+      return 'A live market cap is unavailable for this token. Try another tracked token.';
     }
-    const previous = current / (1 + increase / 100);
-    const embed = createHighAlertEmbed(token, pair, previous, current, new Date());
+    const previous=Math.max(liveMc,Number(token.h)||0,Number(token.b)||0);
+    const simulatedMc=previous*(1+increase/100);
+    const livePrice=Number(pair.priceUsd);
+    const simulatedPrice=Number.isFinite(livePrice)&&livePrice>0?
+      livePrice*simulatedMc/liveMc:pair.priceUsd;
+    const scenario={...pair,marketCap:simulatedMc,priceUsd:simulatedPrice};
+    const embed=createHighAlertEmbed(token,scenario,previous,simulatedMc,new Date());
     try {
       await client.request('/channels/' + targetId + '/messages', {
         method: 'POST',
