@@ -234,7 +234,7 @@ export function createDashboardEmbed(entries,clock=new Date()){
      `**24h** ${trendIcon(pair.priceChange?.h24)} **${formatChange(pair.priceChange?.h24)}**  ·  **5m** ${formatChange(pair.priceChange?.m5)}`,
      `💧 **Liquidity**  ${formatCompact(pair.liquidity?.usd,{usd:true})}`,
      "",
-     `${url?`[View chart](${url})  ·  `:""}`CA \`${ca}\``,
+     `${url ? `[View chart](${url})  ·  ` : ''}CA \`${ca}\``,
    ].join("\n"),inline:false};
  });
  return {title:"📈 SpicyTracker · Crypto Markets",description:entries.length?`${entries.length} token${entries.length===1?"":"s"} tracked · Updates the same message every minute`:"No tracked tokens · Use `/tracker add` to get started",color:dashboardAccent(entries),fields,footer:{text:"DEX Screener · Prices are indicative"},timestamp:clock.toISOString()};
