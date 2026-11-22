@@ -154,22 +154,23 @@ test('compact dashboard separates tokens without attaching separators to heading
   assert.equal(card.fields,undefined);
   assert.equal(card.title,undefined);
   const description=card.description;
-  assert.ok(description.startsWith('**2 tracked tokens** · Live DEX markets\n\n────────────\n**DREAD** · SOLANA'));
-  assert.ok(description.endsWith('\n\n────────────'));
+  assert.ok(description.startsWith('**2 tracked tokens** · Live DEX markets\n\n────────────────────────────\n**DREAD** · SOLANA'));
+  assert.ok(description.endsWith('\n────────────────────────────'));
   assert.match(description,/^\*\*DREAD\*\* · SOLANA$/m);
   assert.match(description,/^\*\*MOON\*\* · BASE$/m);
-  assert.match(description,/CA \x60[^\x60]+\x60\n\n────────────\n\*\*MOON\*\* · BASE/);
+  assert.match(description,/CA \x60[^\x60]+\x60\n────────────────────────────\n\n────────────────────────────\n\*\*MOON\*\* · BASE/);
   assert.match(description,/\*\*MC \$120\.00K\*\* · Liq \$5\.00K/);
   assert.match(description,/24h 🟩 \*\*\+8\.00%\*\* · 5m 🟥 \*\*-2\.00%\*\*/);
   assert.match(description,/Price \*\*\$0\.004\*\*/);
   assert.match(description,/\[View chart\]\(https:\/\/dexscreener\.com\/solana\/demo\) · CA /);
   assert.doesNotMatch(description,/──── \*\*|\x60{3}|ansi/);
   assert.ok(!description.includes(String.fromCharCode(27)));
-  assert.equal(description.split('────────────').length-1,3);
-  assert.ok(description.split('────────────').every((segment,index)=>index===0 || !segment.startsWith('\n\n')));
+  assert.equal(description.split('────────────────────────────').length-1,4);
+  assert.ok(description.includes('\n────────────────────────────\n\n────────────────────────────\n'));
+  assert.ok(!description.includes('────────────────────────────\n\n**'));
 });
 
-test('twelve tokens fit in one compact embed with starting, between-token and ending separators',()=>{
+test('twelve tokens fit in one embed with individual starting and ending separators',()=>{
   const entries=Array.from({length:12},(_,i)=>({
     token:{chain:'solana',symbol:'COIN'+i,address:SOL.slice(0,-2)+String(i).padStart(2,'0')},
     pair:{baseToken:{symbol:'COIN'+i},marketCap:123456789,priceUsd:0.000123,
@@ -179,9 +180,9 @@ test('twelve tokens fit in one compact embed with starting, between-token and en
   const card=createDashboardEmbeds(entries)[0];
   assert.equal(card.fields,undefined);
   assert.equal(card.title,undefined);
-  assert.equal(card.description.split('────────────').length-1,13);
-  assert.ok(card.description.startsWith('**12 tracked tokens** · Live DEX markets\n\n────────────\n'));
-  assert.ok(card.description.endsWith('\n\n────────────'));
+  assert.equal(card.description.split('────────────────────────────').length-1,24);
+  assert.ok(card.description.startsWith('**12 tracked tokens** · Live DEX markets\n\n────────────────────────────\n'));
+  assert.ok(card.description.endsWith('\n────────────────────────────'));
   assert.ok(card.description.length<=4096);
   assert.ok(!card.description.includes(String.fromCharCode(27)));
   assert.doesNotMatch(card.description,/\x60{3}/);

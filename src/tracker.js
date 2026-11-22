@@ -380,12 +380,13 @@ export function createDashboardEmbeds(entries, clock = new Date()) {
   });
   const intro = '**' + entries.length + ' tracked token' +
     (entries.length === 1 ? '' : 's') + '** · Live DEX markets';
-  const separator = '────────────';
+  // Every token has its own top and bottom boundary.
+  // A blank line separates independent token sections.
+  const separator = '────────────────────────────';
   return [{
     description: sections.length
-      ? intro + '\n\n' + separator + '\n' +
-        sections.join('\n\n' + separator + '\n') +
-        '\n\n' + separator
+      ? intro + '\n\n' +
+        sections.map(section => separator + '\n' + section + '\n' + separator).join('\n\n')
       : 'No tracked tokens. Use /tracker add to begin.',
     color: 0x5865f2,
     footer: { text: 'DEX Screener · Indicative prices · ~1 min refresh' },
