@@ -146,3 +146,70 @@ test('storage selection rejects channels with unrelated messages, preserving exi
   }), /contains other messages/);
   assert.equal(client.log.filter(x => x.method === 'DELETE').length, 0);
 });
+
+test('storage command explains when required target channel was not selected', async () => {
+  const client = createFakeDiscord();
+  const result = await executeTrackerCommand({ interaction: interaction('storage', []), client, applicationId: APP });
+  assert.match(result, /No channel selected/);
+  assert.equal(client.log.some(x => x.method === 'POST'), false);
+});
+
+test('storage falls back to a direct Discord channel lookup when guild listing omits it', async () => {
+  const client = createFakeDiscord();
+  const original = client.request.bind(client);
+  const proxy = {
+    ...client,
+    async request(path, options) {
+      if (path === `/guilds/${GUILD}/channels`) return client.channels.filter(x => x.id !== PRIVATE);
+      if (path === `/channels/${PRIVATE}` && (options?.method || 'GET') === 'GET') {
+        return { ...client.channels.find(x => x.id === PRIVATE), guild_id: GUILD };
+      }
+      return original(path, options);
+    },
+  };
+  const result = await selectStorageChannel(proxy, {
+    guildId: GUILD, targetId: PRIVATE, fallbackDashboardChannelId: GENERAL,
+  });
+  assert.equal(result.channelId, PRIVATE);
+  assert.equal(client.messages.get(PRIVATE).length, 1);
+  assert.equal(client.channels.length, 2);
+});
+
+test('private channel without bot access gives an actionable permission error', async () => {
+  const client = createFakeDiscord();
+  const original = client.request.bind(client);
+  const proxy = {
+    ...client,
+    async request(path, options) {
+      if (path === `/guilds/${GUILD}/channels`) return client.channels.filter(x => x.id !== PRIVATE);
+      if (path === `/channels/${PRIVATE}`) {
+        const error = new Error('Forbidden');
+        error.status = 403;
+        throw error;
+      }
+      return original(path, options);
+    },
+  };
+  await assert.rejects(selectStorageChannel(proxy, {
+    guildId: GUILD, targetId: PRIVATE, fallbackDashboardChannelId: GENERAL,
+  }), /cannot access that channel.*View Channel/);
+  assert.equal(client.messages.has(PRIVATE), false);
+});
+
+test('storage rejects channels belonging to another guild', async () => {
+  const client = createFakeDiscord();
+  const original = client.request.bind(client);
+  const proxy = {
+    ...client,
+    async request(path, options) {
+      if (path === `/guilds/${GUILD}/channels`) return client.channels.filter(x => x.id !== PRIVATE);
+      if (path === `/channels/${PRIVATE}`) {
+        return { ...client.channels.find(x => x.id === PRIVATE), guild_id: '999999999999999999' };
+      }
+      return original(path, options);
+    },
+  };
+  await assert.rejects(selectStorageChannel(proxy, {
+    guildId: GUILD, targetId: PRIVATE, fallbackDashboardChannelId: GENERAL,
+  }), /different Discord server/);
+});

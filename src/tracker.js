@@ -89,14 +89,43 @@ export async function saveStore(client, store) {
  * permissions. The user can move the channel and configure role visibility.
  */
 export async function selectStorageChannel(client, { guildId, targetId, fallbackDashboardChannelId }) {
+  if (!/^\d{16,22}$/.test(String(targetId ?? ''))) {
+    throw new Error('No channel selected. Run /tracker storage and choose a text channel in the required target field.');
+  }
   const channels = await client.request(`/guilds/${guildId}/channels`);
-  const target = Array.isArray(channels) && channels.find(x => x.id === targetId && x.type === 0);
-  if (!target) throw new Error('Select an existing text channel in this server.');
+  if (!Array.isArray(channels)) throw new Error('Could not retrieve the server channel list.');
+  let target = channels.find(channel => channel.id === targetId);
+  if (!target) {
+    // Discord may omit permission-restricted channels from guild listings.
+    // Check the selected ID directly before claiming that it does not exist.
+    try {
+      target = await client.request(`/channels/${targetId}`);
+    } catch (error) {
+      if (error.status === 403 || error.status === 404) {
+        throw new Error('SpicyTracker cannot access that channel. In Edit Channel > Permissions, explicitly allow SpicyTracker View Channel, Read Message History, Send Messages and Manage Channels, then retry.');
+      }
+      throw error;
+    }
+  }
+  if (target?.guild_id && target.guild_id !== guildId) {
+    throw new Error('The selected channel belongs to a different Discord server.');
+  }
+  if (target?.type !== 0) {
+    throw new Error('Select a standard text channel. Categories, threads, forums and voice channels cannot store tracker data.');
+  }
   const inspected = await inspectStores(client, guildId);
   if (inspected.some(item => item.readError)) {
     throw new Error('Some existing storage channels are unreadable. Check bot View Channel and Read Message History permissions before moving storage.');
   }
-  const targetMessages = await client.request(`/channels/${targetId}/messages?limit=100`);
+  let targetMessages;
+  try {
+    targetMessages = await client.request(`/channels/${targetId}/messages?limit=100`);
+  } catch (error) {
+    if (error.status === 403) {
+      throw new Error('SpicyTracker can find the selected channel but cannot read its messages. Allow Read Message History and View Channel for the bot.');
+    }
+    throw error;
+  }
   if (!Array.isArray(targetMessages)) throw new Error('Cannot read the selected storage channel.');
   if (targetMessages.some(message => !parseConfig(message.content))) {
     throw new Error('Choose an empty dedicated data channel. This channel contains other messages.');
