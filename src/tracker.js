@@ -58,25 +58,34 @@ export function createStorageEmbed(config) {
   return {
     title: "🔒 SpicyTracker · Private Storage",
     color: 0x5865f2,
+    // Discord always renders description before fields, so keep all visible
+    // settings above the private JSON spoiler in the description itself.
     description: [
       "This message stores your tracker settings. You can move this channel or restrict who can see it.",
+      "",
+      `**Tracked tokens**  **${tokens.length} / ${MAX_TOKENS}**   ·   **Price dashboard**  <#${config.dashboardChannelId}>`,
+      "",
+      "**Watchlist**",
+      listing,
       "",
       "**Internal configuration (click to reveal)**",
       `||${serializeConfig(config)}||`,
     ].join("\n"),
-    fields: [
-      { name: "Tracked tokens", value: `**${tokens.length} / ${MAX_TOKENS}**`, inline: true },
-      { name: "Price dashboard", value: `<#${config.dashboardChannelId}>`, inline: true },
-      { name: "Watchlist", value: listing.slice(0, 1024), inline: false },
-    ],
     footer: { text: "Managed by SpicyTracker · Do not delete or edit this message" },
   };
 }
 
 function isFormattedStorageMessage(message) {
-  return Array.isArray(message?.embeds) && message.embeds.some(embed =>
-    typeof embed?.description === "string" && embed.description.includes("||" + CONFIG_MARKER)
-  );
+  return Array.isArray(message?.embeds) && message.embeds.some(embed => {
+    const description = embed?.description;
+    if (typeof description !== "string") return false;
+    const watchlist = description.indexOf("**Watchlist**");
+    const internalConfig = description.indexOf("**Internal configuration (click to reveal)**");
+    // Detect the new bottom-aligned spoiler; old embeds with the spoiler
+    // above the fields are migrated in place on the next /tracker list.
+    return watchlist >= 0 && internalConfig > watchlist
+      && description.includes("||" + CONFIG_MARKER);
+  });
 }
 
 function hasConfigMarker(message) {

@@ -223,7 +223,7 @@ test('new storage displays a readable embed and hides machine data in spoiler', 
   assert.equal(message.embeds.length, 1);
   assert.match(message.embeds[0].title, /SpicyTracker · Private Storage/);
   assert.match(message.embeds[0].description, /\|\|CRYPTO_TRACKER_CONFIG_V1/);
-  assert.match(message.embeds[0].fields[0].value, /0 \/ 12/);
+  assert.match(message.embeds[0].description, /\*\*Tracked tokens\*\*  \*\*0 \/ 12\*\*/);
   const loaded = await loadStore(client, GUILD);
   assert.equal(loaded.config.dashboardChannelId, GENERAL);
   assert.equal(loaded.needsMigration, false);
@@ -241,7 +241,7 @@ test('legacy JSON storage remains readable and becomes formatted when saved', as
   await saveStore(client, store);
   const message = client.messages.get(PRIVATE)[0];
   assert.equal(message.content, '');
-  assert.equal(message.embeds[0].fields[0].value, '**1 / 12**');
+  assert.match(message.embeds[0].description, /\*\*Tracked tokens\*\*  \*\*1 \/ 12\*\*/);
   const reloaded = await loadStore(client, GUILD);
   assert.equal(reloaded.needsMigration, false);
   assert.deepEqual(reloaded.config.tokens, legacy.tokens);
@@ -271,9 +271,44 @@ test('formatted storage embeds preserve configuration on save and through cleanu
     tokens: [{ chain: 'solana', address: SOL }] };
   const item = createStorageEmbed(config);
   assert.ok(item.description.includes('||CRYPTO_TRACKER_CONFIG_V1'));
-  assert.match(item.fields[2].value, /solana/i);
+  assert.match(item.description, /SOLANA/);
   await selectStorageChannel(client, { guildId: GUILD, targetId: PRIVATE, fallbackDashboardChannelId: GENERAL });
   const result = await cleanupStores(client, GUILD);
   assert.equal(result.kept, PRIVATE);
   assert.deepEqual(result.removed, []);
+});
+
+test('the private configuration spoiler appears strictly after the watchlist', () => {
+  const cfg = { version: 1, dashboardChannelId: GENERAL, dashboardMessageId: null,
+    tokens: [{ chain: 'solana', address: SOL }] };
+  const embed = createStorageEmbed(cfg);
+  const description = embed.description;
+  assert.equal(embed.fields, undefined);
+  assert.ok(description.indexOf('**Tracked tokens**') < description.indexOf('**Watchlist**'));
+  assert.ok(description.indexOf('**Watchlist**') < description.indexOf('**Internal configuration'));
+  assert.ok(description.indexOf('**Internal configuration') < description.indexOf('||CRYPTO_TRACKER_CONFIG_V1'));
+  assert.ok(description.length <= 4096);
+});
+
+test('old formatted storage embeds are migrated to bottom spoiler in the same message', async () => {
+  const client = createFakeDiscord();
+  const existingConfig = { version: 1, dashboardChannelId: GENERAL, dashboardMessageId: null,
+    tokens: [{ chain: 'solana', address: SOL }] };
+  const legacyEmbed = {
+    description: 'This message stores your tracker settings.\\n\\n**Internal configuration (click to reveal)**\\n||' +
+      serializeConfig(existingConfig) + '||',
+    fields: [{ name: 'Tracked tokens', value: '**1 / 12**' }],
+  };
+  client.messages.set(PRIVATE, [{
+    id: '923456789012345678', content: '', embeds: [legacyEmbed],
+  }]);
+  const store = await loadStore(client, GUILD);
+  assert.equal(store.needsMigration, true);
+  await saveStore(client, store);
+  const updated = client.messages.get(PRIVATE)[0];
+  assert.equal(updated.id, '923456789012345678');
+  assert.ok(updated.embeds[0].description.indexOf('**Watchlist**') <
+    updated.embeds[0].description.indexOf('**Internal configuration'));
+  assert.equal((await loadStore(client, GUILD)).needsMigration, false);
+  assert.deepEqual((await loadStore(client, GUILD)).config.tokens, existingConfig.tokens);
 });
