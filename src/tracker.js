@@ -304,61 +304,59 @@ function asChange(value) {if(value==null||value==="")return null;const n=Number(
 function formatChange(value) {const n=asChange(value);return n===null?"—":(n>0?"+":"")+n.toFixed(2)+"%";}
 
 
-// Native Discord embed fields create consistent visual spacing for any token.
-// No hardcoded token identities, emojis, ASCII frames, or manually drawn separators.
+// Dashboard contract: one edited message, one embed, dynamic symbols, no icons or ASCII frames.
+// Visually balanced top / between-token / bottom dividers within the same description.
 function shortAddress(address) {
- const value=String(address??"");
- return value.length>20?value.slice(0,8)+"…"+value.slice(-6):value;
+  const value=String(address??'');
+  return value.length>20 ? value.slice(0,8)+'…'+value.slice(-6) : value;
 }
 
 function dexChartUrl(pair) {
- const value=String(pair?.url??"");
- return value.length<=200 && /^https:\/\/dexscreener\.com\/[a-z0-9/_-]+$/i.test(value)?value:null;
+  const value=String(pair?.url??'');
+  return value.length<=110 && /^https:\/\/dexscreener\.com\/[a-z0-9/_-]+$/i.test(value)?value:null;
 }
 
 function marketCapText(pair) {
- const mc=Number(pair?.marketCap),fdv=Number(pair?.fdv);
- if(Number.isFinite(mc)&&mc>0)return "MC "+formatCompact(mc,{usd:true});
- if(Number.isFinite(fdv)&&fdv>0)return "FDV "+formatCompact(fdv,{usd:true});
- return "MC N/A";
+  const mc=Number(pair?.marketCap),fdv=Number(pair?.fdv);
+  if(Number.isFinite(mc)&&mc>0)return 'MC '+formatCompact(mc,{usd:true});
+  if(Number.isFinite(fdv)&&fdv>0)return 'FDV '+formatCompact(fdv,{usd:true});
+  return 'MC N/A';
 }
 
 export function createDashboardEmbeds(entries,clock=new Date()){
- const fields=entries.map(({token,pair,error})=>{
-  const symbol=safeText(pair?.baseToken?.symbol||token.symbol||token.name,24)||"Unknown token";
-  const chain=safeText(token.chain,16).toUpperCase();
-  const name=symbol+" · "+chain;
-  const ca=shortAddress(token.address);
-  const chart=dexChartUrl(pair);
-  if(!pair) return {
-   name,
-   value:"Market data unavailable"+(error?" · API error":" · No priced pool")+"\nCA `"+ca+"`",
-   inline:false,
-  };
-  return {
-   name,
-   value:[
-    "**"+marketCapText(pair)+"**  ·  24h **"+formatChange(pair.priceChange?.h24)+"**",
-    "Price **"+formatPrice(pair.priceUsd)+"**  ·  Liquidity **"+formatCompact(pair.liquidity?.usd,{usd:true})+"**",
-    "5m "+formatChange(pair.priceChange?.m5)+(chart?"  ·  [View chart ↗]("+chart+")":""),
-    "CA `"+ca+"`",
-   ].join("\n"),
-   inline:false,
-  };
- });
- return [{
-  title:"SpicyTracker · Crypto Markets",
-  description: entries.length
-   ?entries.length+" token"+(entries.length===1?"":"s")+" tracked"
-   :"No tracked tokens. Use `/tracker add` to get started.",
-  fields,
-  color:0x64748b,
-  footer:{text:"DEX Screener · Indicative market data"},
-  timestamp:clock.toISOString(),
- }];
+  const sections=entries.map(({token,pair,error})=>{
+    const symbol=safeText(pair?.baseToken?.symbol||token.symbol||token.name,24)||'Unknown token';
+    const chain=safeText(token.chain,16).toUpperCase();
+    const chart=dexChartUrl(pair);
+    const contract=shortAddress(token.address);
+    const header='**'+symbol+'**  ·  '+chain+(chart?'  ·  [Chart ↗]('+chart+')':'');
+    if(!pair) return [
+      header,
+      '',
+      '*Market data unavailable'+(error?' · API error':' · No priced pool')+'*',
+      'CA `'+contract+'`',
+    ].join('\n');
+    return [
+      header,
+      '**'+marketCapText(pair)+'**  ·  24h **'+formatChange(pair.priceChange?.h24)+'**',
+      '',
+      'Price **'+formatPrice(pair.priceUsd)+'**  ·  Liquidity **'+formatCompact(pair.liquidity?.usd,{usd:true})+'**',
+      '5m **'+formatChange(pair.priceChange?.m5)+'**  ·  CA `'+contract+'`',
+    ].join('\n');
+  });
+  const divider='━━━━━━━━━━━━━━━━';
+  return [{
+    title:'SpicyTracker · Crypto Markets',
+    description:sections.length
+      ?entries.length+' token'+(entries.length===1?'':'s')+' tracked\n\n'+divider+'\n\n'+sections.join('\n\n'+divider+'\n\n')+'\n\n'+divider
+      :'No tracked tokens. Use `/tracker add` to get started.',
+    color:0x64748b,
+    footer:{text:'DEX Screener · Indicative market data'},
+    timestamp:clock.toISOString(),
+  }];
 }
 
-function dashboardMessageContent(){return "";}
+function dashboardMessageContent(){return '';}
 
 export async function hydrateTokenSymbols(client,store,{fetcher,entries}={}){
  const missing=store.config.tokens.filter(x=>!safeText(x.symbol,24));
