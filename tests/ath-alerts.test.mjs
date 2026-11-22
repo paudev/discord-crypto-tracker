@@ -152,19 +152,23 @@ test('compact dashboard separates tokens without attaching separators to heading
   }];
   const card=createDashboardEmbeds(entries)[0];
   assert.equal(card.fields,undefined);
+  assert.equal(card.title,undefined);
   const description=card.description;
+  assert.ok(description.startsWith('**2 tracked tokens** · Live DEX markets\n\n────────────\n**DREAD** · SOLANA'));
+  assert.ok(description.endsWith('\n\n────────────'));
   assert.match(description,/^\*\*DREAD\*\* · SOLANA$/m);
   assert.match(description,/^\*\*MOON\*\* · BASE$/m);
-  assert.match(description,/CA \x60[^\x60]+\x60\n────────────\n\*\*MOON\*\* · BASE/);
+  assert.match(description,/CA \x60[^\x60]+\x60\n\n────────────\n\*\*MOON\*\* · BASE/);
   assert.match(description,/\*\*MC \$120\.00K\*\*/);
   assert.match(description,/🟩 \+8\.00%/);
   assert.match(description,/🟥 -2\.00%/);
   assert.match(description,/\[View chart\]\(https:\/\/dexscreener\.com\/solana\/demo\)/);
-  assert.doesNotMatch(description,/\n\n|──── \*\*|\x60{3}ansi/);
-  assert.equal(description.split('────────────').length-1,1);
+  assert.doesNotMatch(description,/──── \*\*|\x60{3}ansi/);
+  assert.equal(description.split('────────────').length-1,3);
+  assert.ok(description.split('────────────').every((segment,index)=>index===0 || !segment.startsWith('\n\n')));
 });
 
-test('twelve tokens fit in a single compact embed with eleven standalone separators',()=>{
+test('twelve tokens fit in one compact embed with starting, between-token and ending separators',()=>{
   const entries=Array.from({length:12},(_,i)=>({
     token:{chain:'solana',symbol:'COIN'+i,address:SOL.slice(0,-2)+String(i).padStart(2,'0')},
     pair:{baseToken:{symbol:'COIN'+i},marketCap:123456789,priceUsd:0.000123,
@@ -173,7 +177,10 @@ test('twelve tokens fit in a single compact embed with eleven standalone separat
   }));
   const card=createDashboardEmbeds(entries)[0];
   assert.equal(card.fields,undefined);
-  assert.equal(card.description.split('────────────').length-1,11);
+  assert.equal(card.title,undefined);
+  assert.equal(card.description.split('────────────').length-1,13);
+  assert.ok(card.description.startsWith('**12 tracked tokens** · Live DEX markets\n\n────────────\n'));
+  assert.ok(card.description.endsWith('\n\n────────────'));
   assert.ok(card.description.length<=4096);
 });
 

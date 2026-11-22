@@ -344,8 +344,8 @@ function percentChange(v){const n=asChange(v);return n===null?'—':n>0?color('�
 export const ATH_ALERT_COOLDOWN_MS=30*60*1000;
 export const ATH_ALERT_MIN_INCREASE_PCT=5;
 
-// Keep the original compact one-embed layout. Each separator is a single
-// standalone line BETWEEN complete token sections, with no extra blank rows.
+// Preserve the compact dashboard layout. Each standalone separator has one blank
+// line above it, including the starting and ending separator.
 export function createDashboardEmbeds(entries, clock = new Date()) {
   const tick = String.fromCharCode(96);
   const sections = entries.map(({ token, pair, error }) => {
@@ -372,10 +372,12 @@ export function createDashboardEmbeds(entries, clock = new Date()) {
   });
   const intro = '**' + entries.length + ' tracked token' +
     (entries.length === 1 ? '' : 's') + '** · Live DEX markets';
+  const separator = '────────────';
   return [{
-    title: 'SpicyTracker · Markets',
     description: sections.length
-      ? intro + '\n' + sections.join('\n────────────\n')
+      ? intro + '\n\n' + separator + '\n' +
+        sections.join('\n\n' + separator + '\n') +
+        '\n\n' + separator
       : 'No tracked tokens. Use /tracker add to begin.',
     color: 0x5865f2,
     footer: { text: 'DEX Screener · Indicative prices · ~1 min refresh' },
