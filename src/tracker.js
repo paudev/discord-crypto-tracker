@@ -284,10 +284,12 @@ export function formatCompact(n, { usd = false } = {}) {
   if (!Number.isFinite(number)) return 'N/A';
   const absolute = Math.abs(number);
   let result;
-  if (absolute >= 1e12) result = `${(number / 1e12).toFixed(2)}T`;
-  else if (absolute >= 1e9) result = `${(number / 1e9).toFixed(2)}B`;
-  else if (absolute >= 1e6) result = `${(number / 1e6).toFixed(2)}M`;
-  else if (absolute >= 1e3) result = `${(number / 1e3).toFixed(2)}K`;
+  // Avoid floating-point half-ties (56,005 -> 56.00K) on USD displays.
+  const fixedCompact = (divisor) => (Math.round(number / divisor * 100 + Math.sign(number) * 1e-8) / 100).toFixed(2);
+  if (absolute >= 1e12) result = `${fixedCompact(1e12)}T`;
+  else if (absolute >= 1e9) result = `${fixedCompact(1e9)}B`;
+  else if (absolute >= 1e6) result = `${fixedCompact(1e6)}M`;
+  else if (absolute >= 1e3) result = `${fixedCompact(1e3)}K`;
   else result = number.toLocaleString('en-US', { maximumFractionDigits: 2 });
   return `${usd ? '$' : ''}${result}`;
 }
