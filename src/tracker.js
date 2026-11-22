@@ -380,7 +380,8 @@ export function createDashboardEmbeds(entries, clock = new Date()) {
   });
   const intro = '**' + entries.length + ' tracked token' +
     (entries.length === 1 ? '' : 's') + '** · Live DEX markets';
-  const separator = '────────────';
+  // Long, thin rule matching the width of the compact market rows.
+  const separator = '────────────────────────────────────────';
   return [{
     description: sections.length
       ? intro + '\n\n' + separator + '\n' +
