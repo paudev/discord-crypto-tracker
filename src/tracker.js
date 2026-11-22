@@ -332,44 +332,44 @@ function priceAction(value) {
   return formatChange(change);
 }
 
-export function createDashboardEmbeds(entries, clock = new Date()) {
-  // Real Discord headers, clear spacing, one neutral brand accent and
-  // data-driven token names. This stays one embed in one edited message.
-  const sections = entries.map(({ token, pair, error }) => {
-    const symbol = safeText(pair?.baseToken?.symbol || token.symbol || token.name, 24) || 'Unknown token';
-    const chain = safeText(token.chain, 16).toUpperCase();
-    const heading = '──── **' + symbol + '** · ' + chain;
-    const chart = dexChartUrl(pair);
-    const links = (chart ? '[View chart ↗](' + chart + ')  ·  ' : '') +
-      'CA `' + shortAddress(token.address) + '`';
-    if (!pair) return [
-      heading,
-      '*Market data unavailable' + (error ? ' · API error' : ' · No priced pool') + '*',
-      links,
-    ].join('\n');
+// Colorize market data with ANSI in code fences; native headings and links stay outside.
+const ANSI={off:'\x1b[0m',green:'\x1b[1;32m',red:'\x1b[1;31m',cyan:'\x1b[1;36m',white:'\x1b[1;37m'};
+function color(v,tone=ANSI.white){return tone+v+ANSI.off;}
+function code(lines){const ticks=String.fromCharCode(96).repeat(3);return ticks+'ansi\n'+lines.join('\n')+'\n'+ticks;}
+function percentChange(v){const n=asChange(v);return n===null?'—':n>0?color('↑ +'+n.toFixed(2)+'%',ANSI.green):n<0?color('↓ '+n.toFixed(2)+'%',ANSI.red):'0.00%';}
+export const ATH_ALERT_COOLDOWN_MS=30*60*1000;
+export const ATH_ALERT_MIN_INCREASE_PCT=5;
 
-    return [
-      heading,
-      '**' + marketCapText(pair) + '**',
-      '24h **' + priceAction(pair.priceChange?.h24) +
-        '**  ·  5m **' + priceAction(pair.priceChange?.m5) + '**',
-      'Price **' + formatPrice(pair.priceUsd) +
-        '**  ·  Liq **' + formatCompact(pair.liquidity?.usd, { usd: true }) + '**',
-      links,
-    ].join('\n');
+export function createDashboardEmbeds(entries, clock = new Date()) {
+  const sections=entries.map(({token,pair,error})=>{
+    const symbol=safeText(pair?.baseToken?.symbol||token.symbol||token.name,24)||'Unknown token';
+    const title='**'+symbol+'** · '+safeText(token.chain,16).toUpperCase();
+    const chart=dexChartUrl(pair);
+    const tick=String.fromCharCode(96);
+    const links=(chart?'[Chart ↗]('+chart+') · ':'')+'CA '+tick+shortAddress(token.address)+tick;
+    if(!pair)return [title,'*Market data unavailable'+(error?' · API error':' · No priced pool')+'*',links].join('\n');
+    return [title,code([
+      'MC '+color(marketCapText(pair).replace(/^MC /,''),ANSI.cyan)+'  LIQ '+color(formatCompact(pair.liquidity?.usd,{usd:true})),
+      '24h '+percentChange(pair.priceChange?.h24)+'  5m '+percentChange(pair.priceChange?.m5),
+      'PRICE '+color(formatPrice(pair.priceUsd)),
+    ]),links].join('\n');
   });
-  const tokenCount = entries.length;
-  const intro = '**' + tokenCount + ' tracked token' + (tokenCount === 1 ? '' : 's') +
-    '**  ·  Live DEX markets';
-  return [{
-    title: 'SpicyTracker · Markets',
-    description: sections.length
-      ? intro + '\n' + sections.join('\n')
-      : 'No tracked tokens. Use `/tracker add` to begin.',
-    color: 0x5865f2,
-    footer: { text: 'DEX Screener · Indicative prices · ~1 min refresh' },
-    timestamp: clock.toISOString(),
-  }];
+  const intro='**'+entries.length+' tracked token'+(entries.length===1?'':'s')+'** · Live DEX markets';
+  // Every separator has its own line, never shares the heading line.
+  const descriptions=[];
+  let d=intro;
+  for(const section of sections){
+    const sep=d===intro?'\n':'\n────────────\n';
+    if(d.length+sep.length+section.length>4096&&d!==intro){descriptions.push(d);d=section;}
+    else d+=sep+section;
+  }
+  descriptions.push(sections.length?d:'No tracked tokens. Use /tracker add to begin.');
+  return descriptions.map((description,index)=>({
+    title:index?'SpicyTracker · Markets (continued)':'SpicyTracker · Markets',
+    description,color:0x5865f2,
+    footer:{text:'DEX Screener · Indicative prices · ~1 min refresh'},
+    timestamp:clock.toISOString(),
+  }));
 }
 
 function dashboardMessageContent(){return "";}
@@ -393,30 +393,37 @@ function observedMarketCap(pair) {
   const mc = Number(pair.marketCap);
   return Number.isFinite(mc) && mc > 0 ? mc : null;
 }
-export function createHighAlertEmbed(token, pair, previous, current, clock = new Date()) {
-  const symbol = safeText(pair?.baseToken?.symbol || token.symbol, 24) || 'Unknown token';
-  const chain = safeText(token.chain, 16).toUpperCase();
-  const gain = (current / previous - 1) * 100;
-  const chart = dexChartUrl(pair);
+export function createHighAlertEmbed(token,pair,previous,current,clock=new Date()){
+  const symbol=safeText(pair?.baseToken?.symbol||token.symbol,24)||'Unknown token';
+  const chain=safeText(token.chain,16).toUpperCase();
+  const gain=(current/previous-1)*100;
+  const chart=dexChartUrl(pair);
+  const tick=String.fromCharCode(96);
+  const manual=Number(token.b);
   return {
-    title: 'New observed market-cap high',
-    description: [
-      '**' + symbol + '**  ·  `' + chain + '`',
-      '**MC  ' + formatCompact(current, { usd: true }) + '**',
-      '🟩 **+' + gain.toFixed(2) + '%**  vs. previous high',
-      'Previous recorded MC  **' + formatCompact(previous, { usd: true }) + '**',
-      'Price  **' + formatPrice(pair?.priceUsd) + '**' + (chart ? '  ·  [Chart ↗](' + chart + ')' : ''),
-      'CA `' + shortAddress(token.address) + '`',
+    title:'New market-cap high',
+    description:[
+      '**'+symbol+'** · '+chain,
+      code([
+        'NEW HIGH '+color(formatCompact(current,{usd:true}),ANSI.green),
+        'PREVIOUS '+color(formatCompact(previous,{usd:true})),
+        'GAIN     '+color('↑ +'+gain.toFixed(2)+'%',ANSI.green),
+        'PRICE    '+color(formatPrice(pair?.priceUsd),ANSI.cyan),
+      ]),
+      (chart?'[View chart ↗]('+chart+') · ':'')+'CA '+tick+shortAddress(token.address)+tick,
     ].join('\n'),
-    color: 0x22c55e,
-    footer: { text: 'Highest observed since tracking began · Not verified lifetime ATH · DEX Screener' },
-    timestamp: clock.toISOString(),
+    color:0x22c55e,
+    footer:{text:Number.isFinite(manual)&&manual>0&&previous>=manual?
+      'Manually recorded historical ATH · Not independently verified · DEX Screener':
+      'Highest observed since tracking began · Not verified lifetime ATH · DEX Screener'},
+    timestamp:clock.toISOString(),
   };
 }
+
 export async function updateObservedHighs(client, store, entries, { now } = {}) {
   let changed = false, alerts = 0;
   const configured = Number(store.config.athMinPct);
-  const minimumPct = Number.isFinite(configured) && configured >= 0 ? configured : 0;
+  const minimumPct = Math.max(ATH_ALERT_MIN_INCREASE_PCT, Number.isFinite(configured) && configured >= 0 ? configured : 0);
   const channelId = store.config.athChannelId;
   const clock = typeof now === 'function' ? now() : new Date();
   for (const { token, pair } of entries) {
@@ -435,18 +442,23 @@ export async function updateObservedHighs(client, store, entries, { now } = {}) 
       changed = true;
     }
     if (marketCap <= previous) continue;
-    const alertBaseline = Number(token.a) || previous;
-    const eligible = Boolean(channelId) && marketCap > alertBaseline
-      && ((marketCap / alertBaseline - 1) * 100 + 1e-9) >= minimumPct;
+    const manual=Number(token.b);
+    const manualHigh=Number.isFinite(manual)&&manual>0?manual:0;
+    const baseline=Math.max(Number(token.a)||previous,manualHigh);
+    const alertedAt=Number(token.t)||0;
+    const cooldownEnded=!alertedAt||clock.getTime()-alertedAt*1000>=ATH_ALERT_COOLDOWN_MS;
+    const eligible=Boolean(channelId)&&cooldownEnded&&marketCap>Math.max(previous,manualHigh)
+      &&marketCap>baseline&&((marketCap/baseline-1)*100+1e-9)>=minimumPct;
     token.h = marketCap;
     changed = true;
     if (!eligible) continue;
     try {
       await client.request('/channels/' + channelId + '/messages', {
         method: 'POST',
-        body: { embeds: [createHighAlertEmbed(token, pair, previous, marketCap, clock)], allowed_mentions: { parse: [] } },
+        body: { embeds: [createHighAlertEmbed(token, pair, baseline, marketCap, clock)], allowed_mentions: { parse: [] } },
       });
       token.a = marketCap;
+      token.t = Math.floor(clock.getTime()/1000);
       alerts++;
     } catch (error) {
       token.h = previous;
