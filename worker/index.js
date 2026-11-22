@@ -13,12 +13,33 @@ export async function refreshCryptoTracker(env, fetcher = globalThis.fetch) {
   return response.status;
 }
 
+const WORKER_BUILD = 'cron-diagnostics-v1';
+
 export default {
-  async scheduled(_controller, env) {
-    await refreshCryptoTracker(env);
-    console.log('[crypto-tracker] Scheduled refresh succeeded');
+  async scheduled(controller, env) {
+    // These logs distinguish a missing secret, an upstream HTTP failure,
+    // and a Cron Trigger that never reaches the scheduled handler.
+    console.log('[crypto-tracker] Cron invocation started', {
+      schedule: controller?.cron ?? '* * * * *',
+      secretConfigured: typeof env?.REFRESH_SECRET === 'string' && env.REFRESH_SECRET.length >= 16,
+    });
+    try {
+      await refreshCryptoTracker(env);
+      console.log('[crypto-tracker] Scheduled refresh succeeded');
+    } catch (error) {
+      console.error('[crypto-tracker] Scheduled refresh failed:', String(error?.message ?? error));
+      throw error;
+    }
   },
-  fetch() {
-    return new Response('Crypto Tracker scheduler is active; HTTP requests do not trigger refresh.', { status: 200 });
+  // Read-only status endpoint, safe to open from the Cloudflare "Visit" button.
+  // It never calls Vercel or exposes any secret values.
+  fetch(_request, env) {
+    return Response.json({
+      service: 'discord-crypto-tracker',
+      workerBuild: WORKER_BUILD,
+      secretConfigured: typeof env?.REFRESH_SECRET === 'string' && env.REFRESH_SECRET.length >= 16,
+      cronSchedule: '* * * * *',
+      note: 'Read-only Worker status. HTTP requests do not trigger refresh.',
+    }, { headers: { 'Cache-Control': 'no-store' } });
   },
 };

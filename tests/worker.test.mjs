@@ -20,8 +20,37 @@ test('rejects missing/short secret and upstream errors', async () => {
   await assert.rejects(refreshCryptoTracker({ REFRESH_SECRET: 'example-super-secret-value-12345' }, async () => ({ ok: false, status: 401 })), /HTTP 401/);
 });
 
-test('public Worker URL is informational and never triggers a refresh', async () => {
-  const response = worker.fetch();
+test('public Worker status reports deployed code and secret presence without leaking it', async () => {
+  const response = worker.fetch(new Request('https://worker.example/status'), {
+    REFRESH_SECRET: 'example-super-secret-value-12345',
+  });
   assert.equal(response.status, 200);
-  assert.match(await response.text(), /HTTP requests do not trigger/);
+  const status = await response.json();
+  assert.equal(status.service, 'discord-crypto-tracker');
+  assert.equal(status.workerBuild, 'cron-diagnostics-v1');
+  assert.equal(status.cronSchedule, '* * * * *');
+  assert.equal(status.secretConfigured, true);
+  assert.doesNotMatch(JSON.stringify(status), /example-super-secret-value/);
+  assert.match(status.note, /HTTP requests do not trigger/);
+  const missing = await worker.fetch(null, {}).json();
+  assert.equal(missing.secretConfigured, false);
+});
+
+test('scheduled handler logs the invocation and refresh errors', async () => {
+  const oldFetch = globalThis.fetch, oldLog = console.log, oldError = console.error;
+  const logs = [], errors = [];
+  try {
+    globalThis.fetch = async () => ({ ok: false, status: 401 });
+    console.log = (...items) => logs.push(items);
+    console.error = (...items) => errors.push(items);
+    await assert.rejects(worker.scheduled({ cron: '* * * * *' }, {
+      REFRESH_SECRET: 'example-super-secret-value-12345',
+    }), /HTTP 401/);
+    assert.match(logs[0][0], /Cron invocation started/);
+    assert.match(errors[0][0], /Scheduled refresh failed/);
+  } finally {
+    globalThis.fetch = oldFetch;
+    console.log = oldLog;
+    console.error = oldError;
+  }
 });
