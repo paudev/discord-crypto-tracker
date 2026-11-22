@@ -364,7 +364,7 @@ test('ATH channel command rejects private storage and invalid percentage',async(
   const tooLarge=await executeTrackerCommand({interaction:interaction('ath-channel',[
     opt('target',GENERAL),opt('min-increase',101)
   ]),client,applicationId:APP});
-  assert.match(tooLarge,/0-100%/);
+  assert.match(tooLarge,/5-100%/);
   assert.equal((await loadStore(client,GUILD)).config.athChannelId,undefined);
 });
 test('adding a token with market cap seeds observed baseline without instant alert',async()=>{
@@ -400,11 +400,11 @@ test('ATH preview posts the real-looking ATH card to selected channel without up
   const reply=await executeTrackerCommand({interaction:interaction('ath-preview',[
     opt('token','DREAD'),opt('increase',20)
   ]),client,applicationId:APP,fetcher:live});
-  assert.match(reply,/Preview sent/);
-  assert.match(reply,/simulated \+20\.00%/);
+  assert.equal(reply.embeds?.length,1);
+  assert.match(reply.embeds[0].description,/\+20\.00%/);
   const preview=client.messages.get(ALERTS);
   assert.equal(preview.length,1);
-  assert.equal(preview[0].embeds[0].title,'New observed market-cap high');
+  assert.equal(preview[0].embeds[0].title,'New market-cap high');
   assert.equal(preview[0].embeds[0].color,0x22c55e);
   assert.doesNotMatch(JSON.stringify(preview[0].embeds[0]),/PREVIEW|TEST ONLY|Simulated|No changes saved/i);
   assert.match(preview[0].embeds[0].description,/\+20\.00%/);
@@ -425,7 +425,7 @@ test('ATH preview works without alert setup in command channel and supports cont
   const reply=await executeTrackerCommand({interaction:interaction('ath-preview',[
     opt('token',SOL)
   ]),client,applicationId:APP,fetcher:live});
-  assert.match(reply,/Preview sent/);
+  assert.equal(reply.embeds?.length,1);
   assert.equal(client.messages.get(GENERAL).length,before+1);
   assert.equal(client.messages.get(GENERAL)[0].embeds[0].footer.text,'Highest observed since tracking began · Not verified lifetime ATH · DEX Screener');
   assert.equal((await loadStore(client,GUILD)).config.athChannelId,undefined);
@@ -464,7 +464,7 @@ test('authenticated refresh registers the ATH preview slash command once and rem
   const store=await loadStore(client,GUILD);
   assert.equal(await syncTrackerCommandsIfNeeded(client,store,APP,GUILD),true);
   assert.equal(puts,1);
-  assert.equal((await loadStore(client,GUILD)).config.cv,2);
+  assert.equal((await loadStore(client,GUILD)).config.cv,4);
   assert.equal(await syncTrackerCommandsIfNeeded(client,store,APP,GUILD),false);
   assert.equal(puts,1);
 });
@@ -477,4 +477,24 @@ test('command sync skips missing Discord application ID and does not alter stora
   assert.equal(await syncTrackerCommandsIfNeeded(client,store,null,GUILD),false);
   assert.equal(JSON.stringify(store.config),before);
   assert.equal(client.log.filter(x=>x.method==='PUT').length,0);
+});
+
+test('historical ATH command saves reference independently of observed highs',async()=>{
+  const client=createFakeDiscord();
+  const live=()=>({ok:true,json:async()=>[{
+    chainId:'solana',baseToken:{address:SOL,symbol:'DREAD'},
+    priceUsd:'0.000035',marketCap:31000,liquidity:{usd:11970}
+  }]});
+  await executeTrackerCommand({interaction:interaction('storage',[opt('target',PRIVATE)]),client,applicationId:APP});
+  await executeTrackerCommand({interaction:interaction('add',[opt('chain','solana'),opt('address',SOL)]),
+    client,applicationId:APP,fetcher:live});
+  const reply=await executeTrackerCommand({interaction:interaction('ath-set',[
+    opt('token','DREAD'),opt('market-cap',48700)
+  ]),client,applicationId:APP});
+  assert.match(reply,/\$48,700/);
+  const saved=(await loadStore(client,GUILD)).config.tokens[0];
+  assert.equal(saved.h,31000);
+  assert.equal(saved.b,48700);
+  const status=await executeTrackerCommand({interaction:interaction('ath-status'),client,applicationId:APP});
+  assert.match(status,/entered ATH \$48,700/);
 });
