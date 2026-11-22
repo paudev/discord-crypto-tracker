@@ -32,10 +32,14 @@ export const TRACKER_COMMAND = {
     ] },
     { type: SUBCOMMAND, name: 'ath-channel', description: 'Send observed market-cap high alerts to a text channel', options: [
       { type: CHANNEL, name: 'target', description: 'Destination for new observed market-cap highs', required: true, channel_types: [0] },
-      { type: NUMBER, name: 'min-increase', description: 'Percent increase above last alert (default 0)', required: false, min_value: 0, max_value: 100 },
+      { type: NUMBER, name: 'min-increase', description: 'Minimum gain (at least 5%, default 5%)', required: false, min_value: 5, max_value: 100 },
     ] },
     { type: SUBCOMMAND, name: 'ath-off', description: 'Disable observed market-cap alerts' },
     { type: SUBCOMMAND, name: 'ath-status', description: 'Show observed market-cap highs and alert channel' },
+    { type: SUBCOMMAND, name: 'ath-set', description: 'Record an externally checked historical MC high', options: [
+      { type: STRING, name: 'token', description: 'Tracked symbol or contract address', required: true },
+      { type: NUMBER, name: 'market-cap', description: 'Historical high USD value, e.g. 48700', required: true, min_value: 0.01 },
+    ] },
     { type: SUBCOMMAND, name: 'ath-preview', description: 'Show exact live-format ATH card without changing high records', options: [
       { type: STRING, name: 'token', description: 'Tracked token symbol or contract (defaults to first token)', required: false },
       { type: CHANNEL, name: 'target', description: 'Preview destination (defaults to ATH channel or current channel)', required: false, channel_types: [0] },
@@ -47,7 +51,7 @@ export const TRACKER_COMMAND = {
 };
 
 
-const REGISTERED_COMMAND_REVISION = 3;
+const REGISTERED_COMMAND_REVISION = 4;
 
 /** Register newly added slash commands once from the existing authenticated refresh. */
 export async function syncTrackerCommandsIfNeeded(client, store, applicationId, guildId) {
@@ -150,10 +154,10 @@ export async function executeTrackerCommand({ interaction, client, applicationId
   if (command.name === 'ath-channel') {
     const channelId = optionValue(command, 'target');
     const requested = optionValue(command, 'min-increase');
-    const minPct = requested == null ? 0 : Number(requested);
+    const minPct = requested == null ? 5 : Number(requested);
     if (!/^\d{16,22}$/.test(String(channelId ?? ''))) return 'Select a valid text channel.';
     if (channelId === store.configChannelId) return 'Choose a different channel from private storage.';
-    if (!Number.isFinite(minPct) || minPct < 0 || minPct > 100) return 'Minimum increase must be 0-100%.';
+    if (!Number.isFinite(minPct) || minPct < 5 || minPct > 100) return 'Minimum increase must be 5-100%.';
     const channels = await client.request('/guilds/' + guildId + '/channels');
     if (!Array.isArray(channels) || !channels.some(c => c.id === channelId && c.type === 0)) {
       return 'Select an existing text channel in this server that SpicyTracker can view.';
@@ -161,7 +165,7 @@ export async function executeTrackerCommand({ interaction, client, applicationId
     store.config.athChannelId = channelId;
     store.config.athMinPct = minPct;
     await saveStore(client, store);
-    return '✅ Observed-high alerts enabled in <#' + channelId + '> with a ' + minPct + '% minimum increase. These are sampled records since tracking began, not verified lifetime ATHs. Allow View Channel, Send Messages, Embed Links.';
+    return '✅ High alerts enabled in <#' + channelId + '> with a ' + minPct + '% minimum gain and a 30-minute cooldown. Historical ATH references can be set with /tracker ath-set.';
   }
   if (command.name === 'ath-off') {
     store.config.athChannelId = null;
