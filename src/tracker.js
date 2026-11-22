@@ -109,11 +109,14 @@ export function createDashboardEmbed(entries,clock=new Date()){
    const rawUrl=String(pair.url||"");
    const url=/^https:\/\/dexscreener\.com\/[a-z0-9/_-]+$/i.test(rawUrl)?rawUrl:null;
    const marketCap=Number(pair.marketCap),fdv=Number(pair.fdv);
-   const capDisplay=Number.isFinite(marketCap)&&marketCap>0?`MC **${formatCompact(marketCap,{usd:true})}**`:Number.isFinite(fdv)&&fdv>0?`FDV **${formatCompact(fdv,{usd:true})}**`:"MC **N/A**";
+   const capDisplay=Number.isFinite(marketCap)&&marketCap>0?`💰 **MARKET CAP · ${formatCompact(marketCap,{usd:true})}**`:Number.isFinite(fdv)&&fdv>0?`💰 **FDV · ${formatCompact(fdv,{usd:true})}**`:"💰 **MARKET CAP · N/A**";
    return {name:title,value:[
-     `**${formatPrice(pair.priceUsd)}**  ·  5m **${formatChange(pair.priceChange?.m5)}**  ·  24h **${formatChange(pair.priceChange?.h24)}**`,
-     `${capDisplay}  ·  Liq **${formatCompact(pair.liquidity?.usd,{usd:true})}**`,
-     `CA \`${ca}\`${url?`  ·  [Chart](${url})`:""}`,
+     capDisplay,
+     "",
+     `**Price** · **${formatPrice(pair.priceUsd)}**`,
+     `**24h** ${trendIcon(pair.priceChange?.h24)} **${formatChange(pair.priceChange?.h24)}**  ·  **5m** **${formatChange(pair.priceChange?.m5)}**`,
+     `**Liquidity** · **${formatCompact(pair.liquidity?.usd,{usd:true})}**`,
+     `CA \`${ca}\`${url?`  ·  [View chart](${url})`:""}`,
    ].join("\n"),inline:false};
  });
  return {title:"📈 SpicyTracker · Crypto Markets",description:entries.length?`${entries.length} token${entries.length===1?"":"s"} tracked · Auto-refresh ~1 min`:"No tracked tokens · Use `/tracker add` to get started",color:dashboardAccent(entries),fields,footer:{text:"DEX Screener · Prices are indicative"},timestamp:clock.toISOString()};

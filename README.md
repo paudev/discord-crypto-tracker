@@ -7,7 +7,7 @@ A standalone, **free API** Discord price dashboard with **slash commands**. Verc
 - Supports Solana and EVM networks: Solana, Ethereum, Base, BSC, Arbitrum, Polygon, Avalanche, Ronin (where supported by DEX Screener).
 - Uses the public [DEX Screener API](https://docs.dexscreener.com/api/reference); **no API key required**. Looks up pools by token contract address and chooses the **highest USD-liquidity pool where that token is the base asset**, to avoid showing the quote token's price by mistake.
 - Price, 5-minute and 24-hour price change, market cap (or separately labeled FDV), liquidity, contract address, DEX Screener chart link.
-- Up to 12 tracked tokens, displayed as **one compact Discord embed** edited in place. Price and 5m/24h changes share one line; market cap and liquidity share another; a shortened contract and chart link share the third. The accent and per-token symbols reflect price movement. `/tracker list` provides full contract addresses.
+- Up to 12 tracked tokens, displayed in **one balanced Discord embed** edited in place. **Market cap is the first, boldest metric**, with a blank line separating it from the price, combined 24h/5m changes, liquidity, and a shortened contract plus chart link. The accent and per-token symbols reflect price movement. `/tracker list` provides full contract addresses.
 - `/tracker add chain:solana address:<token-CA>` — add a token. On first use, the dashboard appears in the channel where you run the command.
 - `/tracker remove address:<token-CA>` — remove a token (optionally select network if duplicated).
 - `/tracker list` — show tracked chains, contracts and the dashboard channel.
