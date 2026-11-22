@@ -7,7 +7,7 @@ A standalone, **free API** Discord price dashboard with **slash commands**. Verc
 - Supports Solana and EVM networks: Solana, Ethereum, Base, BSC, Arbitrum, Polygon, Avalanche, Ronin (where supported by DEX Screener).
 - Uses the public [DEX Screener API](https://docs.dexscreener.com/api/reference); **no API key required**. Looks up pools by token contract address and chooses the **highest USD-liquidity pool where that token is the base asset**, to avoid showing the quote token's price by mistake.
 - Price, 5-minute and 24-hour price change, market cap (or separately labeled FDV), liquidity, contract address, DEX Screener chart link.
-- Up to 12 tracked tokens, displayed as **one dashboard message with individually colored embeds**. Each token gets a green, red or neutral border based on its 24h change; there are no colored circle emojis. Market cap and its value appear on one bold line, followed by shared price/liquidity and 24h/5m lines. To respect Discord's 10-embed-per-message limit, the last 2–4 tokens are grouped into pairs if tracking 11 or 12 tokens. Existing dashboard messages are edited in place, not recreated. Symbols (DREAD, CoT, etc.) are saved for private storage and `/tracker list`.
+- Up to 12 tracked tokens appear within **one cohesive Discord embed**—no stacked token cards or redundant text header. A single SpicyTracker-red accent border surrounds a compact MC-first list. Blue links open each token's DEX chart, price movement uses directional arrows (↗/↘) with signed percentages instead of colored circle emojis, and a subtle divider separates tokens within the same card. Discord does not support per-word colors in native embeds; ANSI blocks would worsen readability. The existing dashboard message is edited in place.
 - `/tracker add chain:solana address:<token-CA>` — add a token. On first use, the dashboard appears in the channel where you run the command.
 - `/tracker remove address:<token-CA>` — remove a token (optionally select network if duplicated).
 - `/tracker list` — show tracked chains, contracts and the dashboard channel.
@@ -142,6 +142,7 @@ For every-minute checks, deploy a **separate** Cloudflare Worker connected to `p
 
 The private storage message is a readable embed: tracked-token count, dashboard link, and watchlist appear first; the machine-readable configuration is in the collapsed spoiler **at the very bottom of the description**, after the watchlist. The parser accepts old raw JSON posts and new formatted embeds, so upgrades do not discard tracked tokens. Run `/tracker list` to upgrade the selected storage message immediately without triggering a dashboard update. Also check the bot can **View Channel, Send Messages, Embed Links, Read Message History** in the public dashboard channel, otherwise Discord returns HTTP 403 and scheduled refresh cannot post or edit it.
 
-### Colored metrics
+### Discord color and visual limits
 
-Discord's standard embeds do **not** support arbitrary colored text. SpicyTracker uses a different green/red/neutral **embed accent border** for each token (up to ten individual tokens) and signed changes instead of colored-circle icons or hard-to-read ANSI blocks. This retains a single editable message. Color highlights reflect 24h change only and are not investment recommendations.
+Native Discord embeds support a single accent color, not arbitrary colored words. This dashboard uses a unified SpicyTracker-red border, blue chart links, and clear directional arrows for price changes instead of unreliable ANSI code blocks. It is one embed in one message; tracked tokens remain separate rows inside the same card.
+

@@ -33,83 +33,78 @@ test('fetches a free API pair without an API key', async () => {
   assert.equal(pair.priceUsd, '140');
 });
 
-test('formats safe prices without mention injection', function testTiny(){
- assert.match(formatPrice(0.00000001435),/1\.435/);
- const es=createDashboardEmbeds([{token:{chain:'solana',address:SOL},pair:{baseToken:{symbol:'@everyone'},priceUsd:'0.01',marketCap:550000,liquidity:{usd:15000},priceChange:{h24:-3.2,m5:1.5},url:'https://dexscreener.com/solana/abc'}}],new Date('2026-11-23T00:00:00Z'));
- assert.equal(es.length,1);assert.match(es[0].description,/\$0\.01/);
- assert.match(es[0].description,/\*\*MC: \$550\.00K\*\*/);
- assert.doesNotMatch(es[0].title,/@everyone/);
- assert.equal(es[0].color,0xe74c3c);
- assert.equal(es[0].timestamp,'2026-11-23T00:00:00.000Z');
+test('formats token prices without unsafe mentions', function testSafe(){
+ const e=createDashboardEmbeds([{token:{chain:'solana',address:SOL},pair:{baseToken:{symbol:'@everyone'},priceUsd:'0.01',marketCap:550000,liquidity:{usd:15000},priceChange:{h24:-3.2,m5:1.5},url:'https://dexscreener.com/solana/abc'}}],new Date('2026-11-23T00:00:00Z'));
+ assert.equal(e.length,1);
+ assert.match(e[0].description,/\$0\.01/);
+ assert.match(e[0].description,/\*\*MC \$550\.00K\*\*/);
+ assert.doesNotMatch(e[0].description,/@everyone/);
+ assert.equal(e[0].timestamp,'2026-11-23T00:00:00.000Z');
 });
 
-test('serializes and restores Discord-persisted configuration', function testConfig(){
- const config={version:1,dashboardChannelId:'123456789012345678',dashboardMessageId:null,tokens:[{chain:'solana',address:SOL}]};
- assert.deepEqual(parseConfig(serializeConfig(config)),config);
- assert.equal(parseConfig('ordinary chat'),null);
+test('serializes and restores Discord watchlists', function testRoundtrip(){
+ const cfg={version:1,dashboardChannelId:'123456789012345678',dashboardMessageId:null,tokens:[{chain:'solana',address:SOL}]};
+ assert.deepEqual(parseConfig(serializeConfig(cfg)),cfg);
+ assert.equal(parseConfig('hello'),null);
 });
 
-test('market cap is inline and token has colored border without colored circles', function testCap(){
- const es=createDashboardEmbeds([{token:{chain:'solana',address:SOL},pair:{baseToken:{symbol:'DREAD'},priceUsd:'0.00004431',marketCap:38940,liquidity:{usd:13610},priceChange:{h24:52.45},url:'https://dexscreener.com/solana/abc'}}]);
- assert.equal(es.length,1);
- assert.equal(es[0].title,'DREAD · SOLANA');
- assert.equal(es[0].color,0x2ecc71);
- assert.ok(es[0].description.split('\n').includes('**MC: $38.94K**'));
- assert.ok(es[0].description.includes('Price **$0.00004431**'));
- assert.ok(es[0].description.includes('24h **+52.45%**'));
- assert.ok(es[0].description.includes('5m **—**'));
- assert.doesNotMatch(es[0].description,/[🟢🔴⚪]/u);
- assert.ok(es[0].description.includes('So111111…111112'));
+test('single card prioritizes MC and has no colored circles', function testCompact(){
+ const e=createDashboardEmbeds([{token:{chain:'solana',address:SOL},pair:{baseToken:{symbol:'DREAD'},priceUsd:'0.00004431',marketCap:38940,liquidity:{usd:13610},priceChange:{h24:52.45},url:'https://dexscreener.com/solana/abc'}}]);
+ assert.equal(e.length,1);
+ assert.equal(e[0].title,'SpicyTracker · 1 token');
+ assert.equal(e[0].color,0xf43f5e);
+ assert.equal(e[0].author,undefined);
+ const d=e[0].description;
+ assert.match(d,/\*\*DREAD\*\* · SOLANA/);
+ assert.ok(d.split('\n').includes('**MC $38.94K**  ·  24h **↗ +52.45%**'));
+ assert.match(d,/Price \*\*\$0\.00004431\*\*.*Liq \*\*\$13\.61K\*\*/);
+ assert.ok(d.includes('5m —'));
+ assert.doesNotMatch(d,/[🟢🔴⚪]/u);
+ assert.match(d,/\[Chart ↗\]\(https:\/\/dexscreener\.com\/solana\/abc\)/);
 });
 
-test('falling price uses red embed accent and signed percentages', function testRed(){
- const es=createDashboardEmbeds([{token:{chain:'solana',address:SOL},pair:{baseToken:{symbol:'DOWN'},marketCap:22000,priceUsd:'1.2',priceChange:{h24:-10.2,m5:-0.3}}}]);
- assert.equal(es[0].color,0xe74c3c);
- assert.ok(es[0].description.includes('24h **-10.20%**'));
- assert.ok(es[0].description.includes('5m **-0.30%**'));
+test('two tokens appear in the same colored card with one light separator', function testUnison(){
+ const entries=[
+  {token:{chain:'solana',address:SOL,symbol:'DREAD'},pair:{baseToken:{symbol:'DREAD'},marketCap:38940,priceUsd:'0.00004431',priceChange:{h24:10}}},
+  {token:{chain:'base',address:ETH,symbol:'CoT'},pair:{baseToken:{symbol:'CoT'},marketCap:2320000,priceUsd:'0.023',priceChange:{h24:-2}}}
+ ];
+ const e=createDashboardEmbeds(entries);
+ assert.equal(e.length,1);
+ assert.equal(e[0].color,0xf43f5e);
+ assert.equal(e[0].title,'SpicyTracker · 2 tokens');
+ const content=e[0].description;
+ assert.equal(content.split('────────────────────').length-1,1);
+ assert.match(content,/DREAD/);assert.match(content,/CoT/);
+ assert.match(content,/↗ \+10\.00%/);assert.match(content,/↘ -2\.00%/);
+ assert.match(content,/MC \$38\.94K/);assert.match(content,/MC \$2\.32M/);
 });
 
-test('two tokens get separate green and red embeds in the same message', function testTwo(){
- const es=createDashboardEmbeds([{token:{chain:'solana',address:SOL},pair:{baseToken:{symbol:'DREAD'},marketCap:38940,priceUsd:0.001,priceChange:{h24:6}}},{token:{chain:'base',address:ETH},pair:{baseToken:{symbol:'CoT'},marketCap:2320000,priceUsd:0.023,priceChange:{h24:-2}}}]);
- assert.equal(es.length,2);
- assert.equal(es[0].color,0x2ecc71);
- assert.equal(es[1].color,0xe74c3c);
- assert.match(es[0].description,/MC: \$38\.94K/);
- assert.match(es[1].description,/MC: \$2\.32M/);
- assert.equal(es[1].footer.text.includes('DEX Screener'),true);
+test('all twelve tracked tokens fit in a single embed', function testTwelve(){
+ const entries=Array.from({length:12},(_,i)=>({token:{chain:'solana',address:SOL},pair:{baseToken:{symbol:'T'+i},priceUsd:'0.01',marketCap:20000+i,priceChange:{h24:i%2?-1:1}}}));
+ const e=createDashboardEmbeds(entries);
+ assert.equal(e.length,1);
+ assert.equal(e[0].description.split('────────────────────').length-1,11);
+ assert.equal(e[0].description.match(/\*\*T\d+\*\*/g).length,12);
+ assert.ok(e[0].description.length<=4096);
+ assert.ok(JSON.stringify(e).length<=6000);
 });
 
-test('twelve tokens use at most ten embeds and preserve every symbol', function testTwelve(){
- const entries=Array.from({length:12},(_,i)=>({token:{chain:'solana',address:SOL},pair:{baseToken:{symbol:'T'+i},marketCap:20000+i,priceUsd:'0.01',priceChange:{h24:i%2?-1:1}}}));
- const es=createDashboardEmbeds(entries);
- assert.equal(es.length,10);
- assert.ok(es.every(x=>x.description.length<=4096));
- assert.ok(es.reduce((sum,e)=>sum+e.title.length+e.description.length+(e.footer?.text.length??0),0)<6000);
- assert.match(es[0].title,/T0/);
- assert.match(es[8].description,/T8/);
- assert.match(es[8].description,/T9/);
- assert.match(es[9].description,/T10/);
- assert.match(es[9].description,/T11/);
+test('empty watchlists remain readable', function testNoData(){
+ const e=createDashboardEmbeds([]);
+ assert.equal(e.length,1);
+ assert.match(e[0].description,/No tracked tokens/);
+ assert.equal(e[0].title,'SpicyTracker · 0 tokens');
 });
 
-test('eleven tokens group final pair into tenth embed', function testEleven(){
- const entries=Array.from({length:11},(_,i)=>({token:{chain:'solana',address:SOL},pair:{baseToken:{symbol:'T'+i},marketCap:20000+i,priceUsd:'0.01'}}));
- const es=createDashboardEmbeds(entries);
- assert.equal(es.length,10);
- assert.match(es[9].description,/T9/);
- assert.match(es[9].description,/T10/);
+test('FDV fallback is clearly distinguished from MC', function testFDV(){
+ const e=createDashboardEmbeds([{token:{chain:'solana',address:SOL,symbol:'DREAD'},pair:{baseToken:{symbol:'DREAD'},priceUsd:0.5,fdv:90000,priceChange:{m5:-0.5}}}]);
+ assert.match(e[0].description,/\*\*FDV \$90\.00K\*\*/);
+ assert.match(e[0].description,/5m ↘ -0\.50%/);
 });
 
-test('empty watchlist remains a valid embed', function testEmpty(){
- const es=createDashboardEmbeds([]);
- assert.equal(es.length,1);
- assert.match(es[0].description,/No tracked tokens/);
- assert.equal(es[0].color,0x5865f2);
-});
-
-test('missing pool uses stored token symbol and neutral border', function testFallback(){
- const es=createDashboardEmbeds([{token:{chain:'solana',address:SOL,symbol:'DREAD'},pair:null,error:'timeout'}]);
- assert.equal(es[0].title,'DREAD · SOLANA');
- assert.match(es[0].description,/Market data unavailable/);
- assert.equal(es[0].color,0x5865f2);
+test('unavailable pools retain token symbols', function testFallback(){
+ const e=createDashboardEmbeds([{token:{chain:'solana',address:SOL,symbol:'DREAD'},pair:null,error:'timeout'}]);
+ assert.equal(e.length,1);
+ assert.match(e[0].description,/DREAD/);
+ assert.match(e[0].description,/Market data unavailable/);
 });

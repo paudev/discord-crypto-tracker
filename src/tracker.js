@@ -302,60 +302,67 @@ function asChange(value) {if(value==null||value==="")return null;const n=Number(
 
 function formatChange(value) {const n=asChange(value);return n===null?"—":(n>0?"+":"")+n.toFixed(2)+"%";}
 
-// Discord colors entire embeds, not individual lines. Each token gets its own colored embed.
-function trendColor(value){const n=asChange(value);return n===null||n===0?0x5865f2:n>0?0x2ecc71:0xe74c3c;}
 
-function shortAddress(address){const a=String(address??"");return a.length>20?a.slice(0,8)+"…"+a.slice(-6):a;}
+const DASHBOARD_ACCENT = 0xf43f5e; // SpicyTracker red: a single cohesive embed.
+const TOKEN_DIVIDER = '────────────────────';
 
-function dexChartUrl(pair){const url=String(pair?.url??"");return /^https:\/\/dexscreener\.com\/[a-z0-9/_-]+$/i.test(url)?url:null;}
-
-export function createDashboardEmbeds(entries,clock=new Date()){
- const cards=entries.map(({token,pair,error})=>{
-  const symbol=safeText(pair?.baseToken?.symbol||token.symbol||token.name,24)||"Unknown token";
-  const title=`${symbol} · ${safeText(token.chain,16).toUpperCase()}`;
-  const contract=shortAddress(token.address);
-  if(!pair)return {title,color:0x5865f2,description:`**Market data unavailable**${error?" · API error":" · No priced pool"}\nCA \`${contract}\``};
-  const mc=Number(pair.marketCap),fdv=Number(pair.fdv);
-  const hasMC=Number.isFinite(mc)&&mc>0,hasFDV=Number.isFinite(fdv)&&fdv>0;
-  const label=hasMC||!hasFDV?"MC":"FDV";
-  const cap=hasMC?formatCompact(mc,{usd:true}):hasFDV?formatCompact(fdv,{usd:true}):"N/A";
-  const chart=dexChartUrl(pair);
-  return {title,color:trendColor(pair.priceChange?.h24),description:[
-   `**${label}: ${cap}**`,
-   "",
-   `Price **${formatPrice(pair.priceUsd)}**  ·  Liq **${formatCompact(pair.liquidity?.usd,{usd:true})}**`,
-   `24h **${formatChange(pair.priceChange?.h24)}**  ·  5m **${formatChange(pair.priceChange?.m5)}**`,
-   `${chart?`[Chart](${chart}) · `:""}CA \`${contract}\``
-  ].join("\n")};
- });
- if(!cards.length)return [{
-  title:"SpicyTracker · Crypto Markets",
-  description:"No tracked tokens. Use `/tracker add` to get started.",
-  color:0x5865f2,
-  footer:{text:"DEX Screener · Market data is indicative"},timestamp:clock.toISOString()
- }];
- const groups=[];
- if(cards.length<=10){for(const card of cards)groups.push([card]);}
- else {
-  const pairCount=cards.length-10;
-  const singles=cards.length-2*pairCount;
-  for(let i=0;i<singles;i++)groups.push([cards[i]]);
-  for(let i=singles;i<cards.length;i+=2)groups.push(cards.slice(i,i+2));
- }
- const embeds=groups.map(group=>{
-  if(group.length===1)return {...group[0]};
-  return {
-   title:`${group.length} tracked tokens`,
-   color:0x5865f2,
-   description:group.map(card=>`**${card.title}**\n${card.description}`).join("\n\n────────────\n\n")
-  };
- });
- embeds[embeds.length-1].footer={text:"DEX Screener · Indicative market data · Updates approximately every minute"};
- embeds[embeds.length-1].timestamp=clock.toISOString();
- return embeds;
+function shortAddress(address) {
+  const value = String(address ?? '');
+  return value.length > 20 ? value.slice(0, 8) + '…' + value.slice(-6) : value;
+}
+function dexChartUrl(pair) {
+  const value = String(pair?.url ?? '');
+  return /^https:\/\/dexscreener\.com\/[a-z0-9/_-]+$/i.test(value) ? value : null;
+}
+function marketCapText(pair) {
+  const mc = Number(pair?.marketCap);
+  const fdv = Number(pair?.fdv);
+  if (Number.isFinite(mc) && mc > 0) return 'MC ' + formatCompact(mc, { usd: true });
+  if (Number.isFinite(fdv) && fdv > 0) return 'FDV ' + formatCompact(fdv, { usd: true });
+  return 'MC N/A';
+}
+function marketTrend(value) {
+  const num = asChange(value);
+  if (num === null || num === 0) return '';
+  // The arrow is not a circle and conveys direction without requiring ANSI blocks.
+  return num > 0 ? '↗ ' : '↘ ';
 }
 
-function dashboardMessageContent(count){return `**SpicyTracker · Crypto Markets**  ·  ${count} tracked token${count===1?"":"s"}`;}
+/**
+ * Single embed / one continuous card. No repeated embeds or separate cards.
+ * Discord cannot color individual metrics in an ordinary embed; use one brand
+ * accent and blue chart links, with directional arrows instead of status dots.
+ */
+export function createDashboardEmbeds(entries, clock = new Date()) {
+  const sections = entries.map(({ token, pair, error }) => {
+    const label = safeText(pair?.baseToken?.symbol || token.symbol || token.name, 22) || 'Unknown token';
+    const network = safeText(token.chain, 10).toUpperCase();
+    const chart = dexChartUrl(pair);
+    const header = '**' + label + '** · ' + network + (chart ? '  ·  [Chart ↗](' + chart + ')' : '');
+    if (!pair) return [header,
+      '*Market data unavailable' + (error ? ' · API error*' : ' · No priced pool*'),
+      'CA \`' + shortAddress(token.address) + '\`'].join('\n');
+    return [
+      header,
+      '**' + marketCapText(pair) + '**  ·  24h **' + marketTrend(pair.priceChange?.h24) + formatChange(pair.priceChange?.h24) + '**',
+      'Price **' + formatPrice(pair.priceUsd) + '**  ·  Liq **' + formatCompact(pair.liquidity?.usd, { usd: true }) + '**',
+      '5m ' + marketTrend(pair.priceChange?.m5) + formatChange(pair.priceChange?.m5) + '  ·  CA \`' + shortAddress(token.address) + '\`',
+    ].join('\n');
+  });
+  const description = sections.length ? sections.join('\n\n' + TOKEN_DIVIDER + '\n\n')
+    : 'No tracked tokens. Use \`/tracker add\` to get started.';
+  return [{
+    title: 'SpicyTracker · ' + entries.length + ' token' + (entries.length === 1 ? '' : 's'),
+    description,
+    color: DASHBOARD_ACCENT,
+    footer: { text: 'DEX Screener · Indicative prices' },
+    timestamp: clock.toISOString(),
+  }];
+}
+function dashboardMessageContent() {
+  // The title is inside the embed; don't repeat it above the card.
+  return '';
+}
 
 export async function hydrateTokenSymbols(client,store,{fetcher,entries}={}){
  const missing=store.config.tokens.filter(x=>!safeText(x.symbol,24));
