@@ -41,7 +41,9 @@ export function parseConfig(input) {
 
 export function serializeConfig(config) {
   const body = CONFIG_MARKER + JSON.stringify(config);
-  if (body.length > 2000) throw new Error('Watchlist configuration exceeds Discord message limit.');
+  // The configuration is stored inside an embed spoiler (description limit
+  // 4096), not plain message content (2000). Leave room for watchlist labels.
+  if (body.length > 3000) throw new Error('Watchlist configuration exceeds private storage embed limit.');
   return body;
 }
 
