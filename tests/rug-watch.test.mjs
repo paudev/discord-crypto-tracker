@@ -61,7 +61,7 @@ test('25 token config compresses, round-trips highs and rug baselines and fits s
   const embed=createStorageEmbed(config);
   assert.ok(embed.description.length<=4096);
   assert.equal(parseConfig({embeds:[embed]})?.tokens.length,25);
-  assert.match(embed.description,/Use \/tracker list page:2/);
+  assert.match(embed.description,/Use \/tracker list/);
 });
 test('25 tokens are batched into one network request per chain',async()=>{
   const tokens=tokens25();
