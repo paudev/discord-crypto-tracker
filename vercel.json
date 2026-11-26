@@ -1,8 +1,17 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
-    "api/interactions.js": { "maxDuration": 60 },
-    "api/refresh.js": { "maxDuration": 30 },
-    "api/register.js": { "maxDuration": 30 }
+    "api/interactions.js": {
+      "maxDuration": 60
+    },
+    "api/refresh.js": {
+      "maxDuration": 30
+    },
+    "api/register.js": {
+      "maxDuration": 30
+    },
+    "api/rug-refresh.js": {
+      "maxDuration": 30
+    }
   }
 }
