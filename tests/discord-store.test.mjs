@@ -84,7 +84,7 @@ test('storage selection uses existing channel without creating duplicates and pr
   const duplicate = await executeTrackerCommand({ interaction: interaction('add', [opt('chain', 'solana'), opt('address', SOL)]), client, applicationId: APP, fetcher: pairResponse });
   assert.match(duplicate, /already/);
   const listing = await executeTrackerCommand({ interaction: interaction('list'), client, applicationId: APP });
-  assert.match(listing, /1\/12/);
+  assert.match(listing, /1\/25/);
   const removed = await executeTrackerCommand({ interaction: interaction('remove', [opt('address', SOL)]), client, applicationId: APP });
   assert.match(removed, /Removed/);
   state = await loadStore(client, GUILD);
@@ -223,7 +223,7 @@ test('new storage displays a readable embed and hides machine data in spoiler', 
   assert.equal(message.embeds.length, 1);
   assert.match(message.embeds[0].title, /SpicyTracker · Private Storage/);
   assert.match(message.embeds[0].description, /\|\|CRYPTO_TRACKER_CONFIG_V1/);
-  assert.match(message.embeds[0].description, /\*\*Tracked tokens\*\*  \*\*0 \/ 12\*\*/);
+  assert.match(message.embeds[0].description, /\*\*Tracked tokens\*\*  \*\*0 \/ 25\*\*/);
   const loaded = await loadStore(client, GUILD);
   assert.equal(loaded.config.dashboardChannelId, GENERAL);
   assert.equal(loaded.needsMigration, false);
@@ -241,7 +241,7 @@ test('legacy JSON storage remains readable and becomes formatted when saved', as
   await saveStore(client, store);
   const message = client.messages.get(PRIVATE)[0];
   assert.equal(message.content, '');
-  assert.match(message.embeds[0].description, /\*\*Tracked tokens\*\*  \*\*1 \/ 12\*\*/);
+  assert.match(message.embeds[0].description, /\*\*Tracked tokens\*\*  \*\*1 \/ 25\*\*/);
   const reloaded = await loadStore(client, GUILD);
   assert.equal(reloaded.needsMigration, false);
   assert.deepEqual(reloaded.config.tokens, legacy.tokens);
@@ -464,7 +464,7 @@ test('authenticated refresh registers the ATH preview slash command once and rem
   const store=await loadStore(client,GUILD);
   assert.equal(await syncTrackerCommandsIfNeeded(client,store,APP,GUILD),true);
   assert.equal(puts,1);
-  assert.equal((await loadStore(client,GUILD)).config.cv,4);
+  assert.equal((await loadStore(client,GUILD)).config.cv,6);
   assert.equal(await syncTrackerCommandsIfNeeded(client,store,APP,GUILD),false);
   assert.equal(puts,1);
 });
