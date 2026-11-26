@@ -1,7 +1,9 @@
 // This free Cloudflare Worker only schedules the Vercel API; it is a separate deployment.
 const ENDPOINT = 'https://discord-crypto-tracker.vercel.app/api/refresh';
+const RUG_ENDPOINT = 'https://discord-crypto-tracker.vercel.app/api/rug-refresh';
+export const RUG_CHECK_OFFSET_MS = 30_000;
 
-export async function refreshCryptoTracker(env, fetcher = globalThis.fetch) {
+export async function refreshCryptoTracker(env, fetcher = globalThis.fetch, onResult = null) {
   const secret = env?.REFRESH_SECRET;
   if (typeof secret !== 'string' || secret.length < 16) throw new Error('Configure REFRESH_SECRET in Cloudflare Worker secrets');
   const response = await fetcher(ENDPOINT, {
@@ -10,10 +12,50 @@ export async function refreshCryptoTracker(env, fetcher = globalThis.fetch) {
     signal: AbortSignal.timeout(25_000),
   });
   if (!response.ok) throw new Error(`Vercel crypto refresh failed (HTTP ${response.status})`);
+  if (typeof onResult === 'function' && typeof response.json === 'function') {
+    try { onResult(await response.json()); }
+    catch (error) { console.warn('[crypto-tracker] Could not parse refresh status', error.message); }
+  }
   return response.status;
 }
 
-const WORKER_BUILD = 'cron-diagnostics-v1';
+export async function refreshRugWatch(env, fetcher = globalThis.fetch) {
+  const secret = env?.REFRESH_SECRET;
+  if (typeof secret !== 'string' || secret.length < 16) throw new Error('Configure REFRESH_SECRET in Cloudflare Worker secrets');
+  const response = await fetcher(RUG_ENDPOINT, {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + secret },
+    signal: AbortSignal.timeout(25_000),
+  });
+  if (!response.ok) throw new Error('Vercel rug-only refresh failed (HTTP ' + response.status + ')');
+  return response.status;
+}
+
+// Retain the normal minute-based dashboard refresh, then poll for rugs
+// halfway through the minute without editing dashboard or ATH records.
+// Only time spent executing JS counts toward the Worker CPU allowance.
+export async function runScheduledCycle(env, {
+  fetcher = globalThis.fetch,
+  sleep = ms => new Promise(resolve => setTimeout(resolve, ms)),
+  now = () => Date.now(),
+} = {}) {
+  const started = now();
+  let rugEnabled = false;
+  const status = await refreshCryptoTracker(env, fetcher, data => {
+    rugEnabled = data?.rugEnabled === true;
+  });
+  if (!rugEnabled) return { status, rugPolled: false, reason: 'rug-disabled' };
+  const elapsed = Math.max(0, now() - started);
+  if (elapsed > 45_000) {
+    console.warn('[crypto-tracker] Skipped extra rug poll after slow primary refresh');
+    return { status, rugPolled: false };
+  }
+  await sleep(Math.max(0, RUG_CHECK_OFFSET_MS - elapsed));
+  const rugStatus = await refreshRugWatch(env, fetcher);
+  return { status, rugPolled: true, rugStatus };
+}
+
+const WORKER_BUILD = 'rug-30s-v2';
 
 export default {
   async scheduled(controller, env) {
@@ -24,8 +66,8 @@ export default {
       secretConfigured: typeof env?.REFRESH_SECRET === 'string' && env.REFRESH_SECRET.length >= 16,
     });
     try {
-      await refreshCryptoTracker(env);
-      console.log('[crypto-tracker] Scheduled refresh succeeded');
+      const result = await runScheduledCycle(env);
+      console.log('[crypto-tracker] Scheduled refresh succeeded', result);
     } catch (error) {
       console.error('[crypto-tracker] Scheduled refresh failed:', String(error?.message ?? error));
       throw error;
@@ -39,6 +81,7 @@ export default {
       workerBuild: WORKER_BUILD,
       secretConfigured: typeof env?.REFRESH_SECRET === 'string' && env.REFRESH_SECRET.length >= 16,
       cronSchedule: '* * * * *',
+      rugPollInterval: 'approximately 30 seconds (requires current Worker deployment)',
       note: 'Read-only Worker status. HTTP requests do not trigger refresh.',
     }, { headers: { 'Cache-Control': 'no-store' } });
   },

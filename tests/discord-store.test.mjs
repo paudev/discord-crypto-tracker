@@ -521,9 +521,17 @@ test('rug-channel, status, preview and off keep warnings in the chosen channel',
   const preview=await executeTrackerCommand({
     interaction:interaction('rug-preview'),client,applicationId:APP,fetcher:pairResponse,
   });
-  assert.equal(preview.embeds[0].title,'TEST · Suspected rug warning');
+  // The actual card is IDENTICAL to the posted preview embed and uses the
+  // same production title/footer. Only ordinary message text labels simulation.
+  assert.equal(preview.embeds[0].title,'⚠️ Suspected rug · Liquidity collapse');
   assert.equal(client.messages.get(rug).length,1);
-  assert.match(client.messages.get(rug)[0].embeds[0].footer.text,/Simulation only/);
+  const posted=client.messages.get(rug)[0];
+  assert.deepEqual(preview.embeds[0],posted.embeds[0]);
+  assert.equal(preview.content,posted.content);
+  assert.match(posted.content,/Preview only.*simulated/);
+  assert.equal(posted.embeds[0].footer.text,
+    'Suspicious market activity only · Not proof of fraud · DEX Screener sampled data');
+  assert.doesNotMatch(JSON.stringify(posted.embeds[0]),/TEST|Simulation only|Preview only/);
   const disabled=await executeTrackerCommand({
     interaction:interaction('rug-off'),client,applicationId:APP,
   });

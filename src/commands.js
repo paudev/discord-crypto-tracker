@@ -222,17 +222,20 @@ export async function executeTrackerCommand({ interaction, client, applicationId
     if (!pair || !(Number(pair.priceUsd) > 0) || !(Number(pair.liquidity?.usd) > 0)) {
       return 'A live priced pool with known liquidity is required for a preview.';
     }
-    // Simulate a 90% liquidity reduction and a 75% price reduction.
+    // Use the exact production embed renderer and identical simulated
+    // sample. Mark the MESSAGE (not the card) as a simulation so everyone
+    // can inspect the real layout without mistaking it for a detected rug.
     const embed = createRugAlertEmbed(found[0], pair,
-      Number(pair.liquidity.usd) * 10, Number(pair.priceUsd) * 4, new Date(), true);
+      Number(pair.liquidity.usd) * 10, Number(pair.priceUsd) * 4, new Date());
+    const notice = '⚠️ Preview only — simulated liquidity and price collapse; no real rug detected.';
     try {
       await client.request('/channels/' + channelId + '/messages', {
-        method: 'POST', body: { embeds: [embed], allowed_mentions: { parse: [] } },
+        method: 'POST', body: { content: notice, embeds: [embed], allowed_mentions: { parse: [] } },
       });
     } catch (error) {
       return 'Could not send the preview. Grant SpicyTracker Send Messages and Embed Links in that channel.';
     }
-    return { embeds: [embed] };
+    return { content: notice, embeds: [embed] };
   }
   if (command.name === 'ath-channel') {
     const channelId = optionValue(command, 'target');
