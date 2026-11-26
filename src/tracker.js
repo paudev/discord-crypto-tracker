@@ -402,6 +402,23 @@ export function createDashboardEmbeds(entries, clock = new Date()) {
   }];
 }
 
+// Preserve the original single-message display for <=12 tokens. Larger
+// dashboards use multiple independently edited messages (Discord 4096 limit).
+export function createDashboardPages(entries, clock = new Date()) {
+  const whole = createDashboardEmbeds(entries, clock);
+  if (entries.length <= 12 && whole[0].description.length <= 3900) return [whole];
+  const size = 10, pages = [], count = Math.ceil(entries.length / size);
+  for (let i = 0; i < count; i++) {
+    const embeds = createDashboardEmbeds(entries.slice(i * size, (i + 1) * size), clock);
+    embeds[0].description = embeds[0].description.replace(
+      /^\*\*\d+ tracked tokens?\*\* · Live DEX markets/,
+      '**' + entries.length + ' tracked tokens** · Live DEX markets · ' + (i + 1) + '/' + count);
+    if (embeds[0].description.length > 4096) throw new Error('Dashboard page exceeds Discord embed limit');
+    pages.push(embeds);
+  }
+  return pages;
+}
+
 function dashboardMessageContent(){return "";}
 
 export async function hydrateTokenSymbols(client,store,{fetcher,entries}={}){
@@ -504,21 +521,38 @@ export async function publishDashboard(client, store, { fetcher, now } = {}) {
   const entries = await fetchAllPairs(tokens, fetcher);
   await hydrateTokenSymbols(client, store, { entries });
   const highs = await updateObservedHighs(client, store, entries, { now });
-  const embeds = createDashboardEmbeds(entries, now ? now() : new Date());
+  const pages = createDashboardPages(entries, now ? now() : new Date());
   const content = dashboardMessageContent(tokens.length);
   const channelId = store.config.dashboardChannelId;
-  let messageId = store.config.dashboardMessageId;
-  if (messageId) {
-    const response = await client.request(`/channels/${channelId}/messages/${messageId}`, {
-      method: 'PATCH', body: { content, embeds, allowed_mentions: { parse: [] } }, allow404: true,
+  const previousIds = Array.isArray(store.config.dashboardMessageIds) && store.config.dashboardMessageIds.length
+    ? store.config.dashboardMessageIds : (store.config.dashboardMessageId ? [store.config.dashboardMessageId] : []);
+  const ids = [];
+  let created = false;
+  for (let i = 0; i < pages.length; i++) {
+    const embeds = pages[i], oldId = previousIds[i];
+    if (oldId) {
+      const edited = await client.request('/channels/' + channelId + '/messages/' + oldId, {
+        method: 'PATCH', body: { content, embeds, allowed_mentions: { parse: [] } }, allow404: true,
+      });
+      if (edited) { ids.push(oldId); continue; }
+    }
+    const posted = await client.request('/channels/' + channelId + '/messages', {
+      method: 'POST', body: { content, embeds, allowed_mentions: { parse: [] } },
     });
-    if (response) return { updated: true, count: tokens.length, messageId, ...highs };
+    ids.push(posted.id);
+    created = true;
   }
-  const created = await client.request(`/channels/${channelId}/messages`, { method: 'POST', body: {
-    content, embeds, allowed_mentions: { parse: [] },
-  } });
-  messageId = created.id;
-  store.config.dashboardMessageId = messageId;
-  await saveStore(client, store);
-  return { created: true, count: tokens.length, messageId, ...highs };
+  const changed = ids.length !== previousIds.length || ids.some((id, i) => id !== previousIds[i]);
+  if (changed) {
+    store.config.dashboardMessageId = ids[0];
+    if (ids.length > 1) store.config.dashboardMessageIds = ids;
+    else delete store.config.dashboardMessageIds;
+    await saveStore(client, store);
+  }
+  // Never delete old pages until the new identifiers have been persisted.
+  for (const stale of previousIds.slice(pages.length)) {
+    try { await client.request('/channels/' + channelId + '/messages/' + stale, { method: 'DELETE', allow404: true }); }
+    catch (error) { console.warn('[tracker:pages] Could not remove old page:', error.message); }
+  }
+  return { created, updated: !created, count: tokens.length, messageId: ids[0], pages: ids.length, ...highs };
 }
