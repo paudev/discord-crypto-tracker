@@ -2,7 +2,7 @@ import { createPublicKey, verify as cryptoVerify, timingSafeEqual } from 'node:c
 
 export const DISCORD_API = 'https://discord.com/api/v10';
 export const CONFIG_MARKER = 'CRYPTO_TRACKER_CONFIG_V1\n';
-export const MAX_TOKENS = 12;
+export const MAX_TOKENS = 25;
 export const CHAIN_CHOICES = [
   { name: 'Solana', value: 'solana' },
   { name: 'Ethereum', value: 'ethereum' },
