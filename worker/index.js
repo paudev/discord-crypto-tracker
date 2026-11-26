@@ -3,7 +3,7 @@ const ENDPOINT = 'https://discord-crypto-tracker.vercel.app/api/refresh';
 const RUG_ENDPOINT = 'https://discord-crypto-tracker.vercel.app/api/rug-refresh';
 export const RUG_CHECK_OFFSET_MS = 30_000;
 
-export async function refreshCryptoTracker(env, fetcher = globalThis.fetch) {
+export async function refreshCryptoTracker(env, fetcher = globalThis.fetch, onResult = null) {
   const secret = env?.REFRESH_SECRET;
   if (typeof secret !== 'string' || secret.length < 16) throw new Error('Configure REFRESH_SECRET in Cloudflare Worker secrets');
   const response = await fetcher(ENDPOINT, {
@@ -12,6 +12,10 @@ export async function refreshCryptoTracker(env, fetcher = globalThis.fetch) {
     signal: AbortSignal.timeout(25_000),
   });
   if (!response.ok) throw new Error(`Vercel crypto refresh failed (HTTP ${response.status})`);
+  if (typeof onResult === 'function' && typeof response.json === 'function') {
+    try { onResult(await response.json()); }
+    catch (error) { console.warn('[crypto-tracker] Could not parse refresh status', error.message); }
+  }
   return response.status;
 }
 
@@ -36,7 +40,11 @@ export async function runScheduledCycle(env, {
   now = () => Date.now(),
 } = {}) {
   const started = now();
-  const status = await refreshCryptoTracker(env, fetcher);
+  let rugEnabled = false;
+  const status = await refreshCryptoTracker(env, fetcher, data => {
+    rugEnabled = data?.rugEnabled === true;
+  });
+  if (!rugEnabled) return { status, rugPolled: false, reason: 'rug-disabled' };
   const elapsed = Math.max(0, now() - started);
   if (elapsed > 45_000) {
     console.warn('[crypto-tracker] Skipped extra rug poll after slow primary refresh');
