@@ -167,3 +167,26 @@ test('failed rug alert preserves prior baseline for retry',async()=>{
   const retry=await updateRugWatch(f.client,f.store,sample(t,{liq:100,price:0.0001}),time('02'));
   assert.equal(retry.rugAlerts,1);
 });
+
+
+test('high-entropy 25-token configuration survives multi-field private storage',()=>{
+  let seed=742390;
+  const rng=()=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed/4294967296};
+  const chars='123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+  const randText=n=>Array.from({length:n},()=>chars[Math.floor(rng()*chars.length)]).join('');
+  const tokens=Array.from({length:25},(_,i)=>({
+    chain:'solana',address:randText(44),symbol:randText(24),
+    h:rng()*1e11,a:rng()*1e11,b:rng()*1e11,t:1000000000+Math.floor(rng()*9e8),
+    r:[randText(16),Math.round(rng()*1e7*100)/100,Number(rng().toPrecision(9)),
+      1000000000+Math.floor(rng()*9e8),1000000000+Math.floor(rng()*9e8)],
+  }));
+  const config={version:1,dashboardChannelId:DASH,dashboardMessageId:DASH,
+    dashboardMessageIds:[DASH,MSG,RUG],athChannelId:RUG,rugChannelId:RUG,cv:6,tokens};
+  const embed=createStorageEmbed(config);
+  assert.ok(Array.isArray(embed.fields) && embed.fields.length>0);
+  assert.ok(embed.description.length<=4096);
+  const total=embed.title.length+embed.description.length+embed.footer.text.length+
+    embed.fields.reduce((sum,field)=>sum+field.name.length+field.value.length,0);
+  assert.ok(total<=6000);
+  assert.deepEqual(parseConfig({embeds:[embed]}),config);
+});
