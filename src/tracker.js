@@ -552,7 +552,7 @@ export const RUG_ALERT_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 const RUG_MAX_SAMPLE_GAP_MS = 15 * 60 * 1000;
 const RUG_MAX_ALERTS_PER_REFRESH = 5;
 
-export function createRugAlertEmbed(token, pair, beforeLiquidity, beforePrice, clock = new Date(), preview = false) {
+export function createRugAlertEmbed(token, pair, beforeLiquidity, beforePrice, clock = new Date()) {
   const nowLiquidity = Number(pair.liquidity?.usd);
   const nowPrice = Number(pair.priceUsd);
   const liqDrop = (1 - nowLiquidity / beforeLiquidity) * 100;
@@ -561,7 +561,7 @@ export function createRugAlertEmbed(token, pair, beforeLiquidity, beforePrice, c
   const chart = dexChartUrl(pair);
   const tick = String.fromCharCode(96);
   return {
-    title: preview ? 'TEST · Suspected rug warning' : '⚠️ Suspected rug · Liquidity collapse',
+    title: '⚠️ Suspected rug · Liquidity collapse',
     description: [
       '**' + symbol + '** · ' + safeText(token.chain, 16).toUpperCase(),
       'Liquidity: **' + formatCompact(beforeLiquidity, { usd: true }) + '** → **' +
@@ -572,9 +572,7 @@ export function createRugAlertEmbed(token, pair, beforeLiquidity, beforePrice, c
         'CA ' + tick + shortAddress(token.address) + tick,
     ].join('\n'),
     color: 0xef4444,
-    footer: { text: preview
-      ? 'Simulation only · No detection occurred'
-      : 'Suspicious market activity only · Not proof of fraud · DEX Screener sampled data' },
+    footer: { text: 'Suspicious market activity only · Not proof of fraud · DEX Screener sampled data' },
     timestamp: clock.toISOString(),
   };
 }
