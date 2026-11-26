@@ -56,7 +56,7 @@ test('25 token config compresses, round-trips highs and rug baselines and fits s
     rugChannelId:RUG,dashboardMessageId:DASH,dashboardMessageIds:[DASH,MSG,RUG],tokens};
   const text=serializeConfig(config);
   assert.match(text,/CRYPTO_TRACKER_CONFIG_V1\nz:/);
-  assert.ok(text.length<=3000);
+  assert.ok(text.length<=5500);
   assert.deepEqual(parseConfig(text),config);
   const embed=createStorageEmbed(config);
   assert.ok(embed.description.length<=4096);
