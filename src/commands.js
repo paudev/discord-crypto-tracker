@@ -1,6 +1,6 @@
 import { CHAIN_CHOICES, MAX_TOKENS, safeText } from './discord.js';
 import { normalizeToken, fetchTokenPair } from './dexscreener.js';
-import { cleanupStores, createHighAlertEmbed, hydrateTokenSymbols, loadStore, publishDashboard, saveStore, selectStorageChannel } from './tracker.js';
+import { cleanupStores, createHighAlertEmbed, createRugAlertEmbed, hydrateTokenSymbols, loadStore, publishDashboard, saveStore, selectStorageChannel } from './tracker.js';
 
 const STRING = 3;
 const CHANNEL = 7;
@@ -32,6 +32,15 @@ export const TRACKER_COMMAND = {
     ] },
     { type: SUBCOMMAND, name: 'storage', description: 'Choose an existing private text channel for tracker data', options: [
       { type: CHANNEL, name: 'target', description: 'Your private data channel (move it and set role permissions in Discord)', required: true, channel_types: [0] },
+    ] },
+    { type: SUBCOMMAND, name: 'rug-channel', description: 'Warn about likely liquidity-pull rugs in a text channel', options: [
+      { type: CHANNEL, name: 'target', description: 'Channel for suspected rug warnings', required: true, channel_types: [0] },
+    ] },
+    { type: SUBCOMMAND, name: 'rug-off', description: 'Disable suspected rug warnings' },
+    { type: SUBCOMMAND, name: 'rug-status', description: 'Show rug-watch status, thresholds and destination' },
+    { type: SUBCOMMAND, name: 'rug-preview', description: 'Send a clearly marked simulated rug warning', options: [
+      { type: STRING, name: 'token', description: 'Tracked token symbol or contract address (defaults to first)', required: false },
+      { type: CHANNEL, name: 'target', description: 'Preview channel (defaults to rug channel)', required: false, channel_types: [0] },
     ] },
     { type: SUBCOMMAND, name: 'ath-channel', description: 'Send observed market-cap high alerts to a text channel', options: [
       { type: CHANNEL, name: 'target', description: 'Destination for new observed market-cap highs', required: true, channel_types: [0] },
@@ -95,6 +104,8 @@ const helpText = [
   '• `/tracker ath-set token:DREAD market-cap:48700` — save historical ATH reference',
   '• `/tracker ath-preview` — show the exact live alert card without changing ATH records',
   '• `/tracker ath-off` — disable alerts',
+  '• `/tracker rug-channel target:#rug-alerts` — warn on severe liquidity collapse',
+  '• `/tracker rug-status` · `/tracker rug-preview` · `/tracker rug-off` — manage and test rug watch',
   '• `/tracker channel target:#crypto-prices` — move the public dashboard',
   '• `/tracker storage target:#my-private-channel` — choose the private storage channel; set roles/categories in Discord',
   '• `/tracker cleanup` — merge watchlists and remove safe duplicate bot-created storage channels',
@@ -163,6 +174,66 @@ export async function executeTrackerCommand({ interaction, client, applicationId
   // Upgrade legacy raw JSON storage to a readable embed without posting to the price dashboard.
   if (store.needsMigration) await saveStore(client, store);
 
+  if (command.name === 'rug-channel') {
+    const channelId = optionValue(command, 'target');
+    if (!/^\d{16,22}$/.test(String(channelId ?? ''))) return 'Select a valid text channel.';
+    if (channelId === store.configChannelId) return 'Rug alerts cannot go to the private storage channel.';
+    const channels = await client.request('/guilds/' + guildId + '/channels');
+    if (!Array.isArray(channels) || !channels.some(c => c.id === channelId && c.type === 0)) {
+      return 'Select an existing text channel that SpicyTracker can view.';
+    }
+    store.config.rugChannelId = channelId;
+    await saveStore(client, store);
+    return '✅ Rug watch enabled in <#' + channelId +
+      '>. It warns about a 95%+ liquidity drop, or 70%+ liquidity and 50%+ price drops within 15 minutes on the same pool. First refresh establishes baselines. These are warnings, not verified rugs.';
+  }
+  if (command.name === 'rug-off') {
+    store.config.rugChannelId = null;
+    await saveStore(client, store);
+    return '✅ Suspected rug alerts disabled. Stored samples are retained for recovery.';
+  }
+  if (command.name === 'rug-status') {
+    const sampled = store.config.tokens.filter(t => Array.isArray(t.r) && t.r.length >= 4).length;
+    return '**Suspected rug watch**\nChannel: ' +
+      (store.config.rugChannelId ? '<#' + store.config.rugChannelId + '>' : 'Disabled') +
+      '\nTracked tokens: ' + store.config.tokens.length + '/' + MAX_TOKENS +
+      '\nSampled pools: ' + sampled +
+      '\nTrigger: ≥95% liquidity loss OR ≥70% liquidity loss and ≥50% price loss' +
+      '\nOnly the same pool and samples ≤15 minutes apart; starting liquidity ≥$5,000' +
+      '\n6-hour per-token cooldown · Data outages and pool switches never trigger a warning.' +
+      '\nNot a fraud determination.';
+  }
+  if (command.name === 'rug-preview') {
+    const channelId = optionValue(command, 'target') || store.config.rugChannelId || interaction.channel_id;
+    if (!/^\d{16,22}$/.test(String(channelId ?? ''))) return 'Choose a valid text channel.';
+    if (channelId === store.configChannelId) return 'Previews cannot go to the private storage channel.';
+    const channels = await client.request('/guilds/' + guildId + '/channels');
+    if (!Array.isArray(channels) || !channels.some(c => c.id === channelId && c.type === 0)) {
+      return 'Choose an existing text channel in this server.';
+    }
+    if (!store.config.tokens.length) return 'Add a tracked token first.';
+    const search = String(optionValue(command, 'token') || '').trim();
+    const found = search ? findTracked(store.config.tokens, search) : [store.config.tokens[0]];
+    if (!found.length) return 'No matching tracked token.';
+    if (found.length > 1) return 'Multiple tokens share this symbol; use the contract address.';
+    let pair;
+    try { pair = await fetchTokenPair(found[0], fetcher); }
+    catch (error) { return 'Cannot retrieve current market data for the rug preview.'; }
+    if (!pair || !(Number(pair.priceUsd) > 0) || !(Number(pair.liquidity?.usd) > 0)) {
+      return 'A live priced pool with known liquidity is required for a preview.';
+    }
+    // Simulate a 90% liquidity reduction and a 75% price reduction.
+    const embed = createRugAlertEmbed(found[0], pair,
+      Number(pair.liquidity.usd) * 10, Number(pair.priceUsd) * 4, new Date(), true);
+    try {
+      await client.request('/channels/' + channelId + '/messages', {
+        method: 'POST', body: { embeds: [embed], allowed_mentions: { parse: [] } },
+      });
+    } catch (error) {
+      return 'Could not send the preview. Grant SpicyTracker Send Messages and Embed Links in that channel.';
+    }
+    return { embeds: [embed] };
+  }
   if (command.name === 'ath-channel') {
     const channelId = optionValue(command, 'target');
     const requested = optionValue(command, 'min-increase');
