@@ -516,11 +516,101 @@ export async function updateObservedHighs(client, store, entries, { now } = {}) 
   return { alerts, athEnabled: Boolean(channelId) };
 }
 
+// DEX market data can flag a possible liquidity pull; it cannot prove fraud.
+// Trigger only on fresh samples from the SAME pool (not a pool migration).
+export const RUG_MIN_BASE_LIQUIDITY_USD = 5000;
+export const RUG_ALERT_COOLDOWN_MS = 6 * 60 * 60 * 1000;
+const RUG_MAX_SAMPLE_GAP_MS = 15 * 60 * 1000;
+const RUG_MAX_ALERTS_PER_REFRESH = 5;
+
+export function createRugAlertEmbed(token, pair, beforeLiquidity, beforePrice, clock = new Date(), preview = false) {
+  const nowLiquidity = Number(pair.liquidity?.usd);
+  const nowPrice = Number(pair.priceUsd);
+  const liqDrop = (1 - nowLiquidity / beforeLiquidity) * 100;
+  const priceDrop = (1 - nowPrice / beforePrice) * 100;
+  const symbol = safeText(pair.baseToken?.symbol || token.symbol, 24) || 'Unknown token';
+  const chart = dexChartUrl(pair);
+  const tick = String.fromCharCode(96);
+  return {
+    title: preview ? 'TEST · Suspected rug warning' : '⚠️ Suspected rug · Liquidity collapse',
+    description: [
+      '**' + symbol + '** · ' + safeText(token.chain, 16).toUpperCase(),
+      'Liquidity: **' + formatCompact(beforeLiquidity, { usd: true }) + '** → **' +
+        formatCompact(nowLiquidity, { usd: true }) + '** (🟥 -' + liqDrop.toFixed(1) + '%)',
+      'Price: **' + formatPrice(beforePrice) + '** → **' + formatPrice(nowPrice) +
+        '** (' + (priceDrop > 0 ? '🟥 -' : '+') + Math.abs(priceDrop).toFixed(1) + '%)',
+      (chart ? '[View chart](' + chart + ') · ' : '') +
+        'CA ' + tick + shortAddress(token.address) + tick,
+    ].join('\n'),
+    color: 0xef4444,
+    footer: { text: preview
+      ? 'Simulation only · No detection occurred'
+      : 'Suspicious market activity only · Not proof of fraud · DEX Screener sampled data' },
+    timestamp: clock.toISOString(),
+  };
+}
+
+export async function updateRugWatch(client, store, entries, { now } = {}) {
+  const channelId = store.config.rugChannelId;
+  if (!channelId) return { rugAlerts: 0, rugEnabled: false };
+  const clock = typeof now === 'function' ? now() : new Date();
+  const ts = Math.floor(clock.getTime() / 1000);
+  let rugAlerts = 0, changed = false;
+  for (const { token, pair } of entries) {
+    if (!pair) continue; // API error or missing pool is NOT evidence of a rug.
+    const liquidity = pair.liquidity?.usd == null ? NaN : Number(pair.liquidity.usd);
+    const price = pair.priceUsd == null ? NaN : Number(pair.priceUsd);
+    const address = String(pair.pairAddress || '');
+    if (!address || !Number.isFinite(liquidity) || liquidity < 0 ||
+        !Number.isFinite(price) || price <= 0) continue;
+    // Compact persistent sample: [pair, liquidityUsd, priceUsd, sampledAt, alertedAt].
+    const prior = Array.isArray(token.r) ? token.r : null;
+    const lastAlert = Number(prior?.[4]) || 0;
+    const oldLiquidity = Number(prior?.[1]);
+    const oldPrice = Number(prior?.[2]);
+    const samePool = prior?.[0] === address;
+    const ageMs = (ts - (Number(prior?.[3]) || 0)) * 1000;
+    const recent = samePool && ageMs > 0 && ageMs <= RUG_MAX_SAMPLE_GAP_MS;
+    const healthy = oldLiquidity >= RUG_MIN_BASE_LIQUIDITY_USD &&
+      Number.isFinite(oldPrice) && oldPrice > 0;
+    const liquidityDrop = recent && healthy ? 1 - liquidity / oldLiquidity : 0;
+    const priceDrop = recent && healthy ? 1 - price / oldPrice : 0;
+    // Either >95% of liquidity removed, or >70% liquidity plus >50% price fall.
+    const suspicious = liquidityDrop >= 0.95 ||
+      (liquidityDrop >= 0.70 && priceDrop >= 0.50);
+    const cooldown = lastAlert > 0 && clock.getTime() - lastAlert * 1000 < RUG_ALERT_COOLDOWN_MS;
+    let alertedAt = lastAlert;
+    if (suspicious && !cooldown) {
+      // Prevent mass alert spikes from exceeding serverless/Discord rate limits.
+      if (rugAlerts >= RUG_MAX_ALERTS_PER_REFRESH) continue;
+      try {
+        await client.request('/channels/' + channelId + '/messages', {
+          method: 'POST', body: {
+            embeds: [createRugAlertEmbed(token, pair, oldLiquidity, oldPrice, clock)],
+            allowed_mentions: { parse: [] },
+          },
+        });
+        alertedAt = ts;
+        rugAlerts++;
+      } catch (error) {
+        // Preserve the previous baseline, so the next healthy refresh can retry.
+        console.error('[tracker:rug] Could not alert for', token.chain, error.message);
+        continue;
+      }
+    }
+    token.r = [address, liquidity, price, ts, alertedAt];
+    changed = true;
+  }
+  if (changed) await saveStore(client, store);
+  return { rugAlerts, rugEnabled: true };
+}
+
 export async function publishDashboard(client, store, { fetcher, now } = {}) {
   const tokens = store.config.tokens;
   const entries = await fetchAllPairs(tokens, fetcher);
   await hydrateTokenSymbols(client, store, { entries });
   const highs = await updateObservedHighs(client, store, entries, { now });
+  const rugs = await updateRugWatch(client, store, entries, { now });
   const pages = createDashboardPages(entries, now ? now() : new Date());
   const content = dashboardMessageContent(tokens.length);
   const channelId = store.config.dashboardChannelId;
@@ -554,5 +644,5 @@ export async function publishDashboard(client, store, { fetcher, now } = {}) {
     try { await client.request('/channels/' + channelId + '/messages/' + stale, { method: 'DELETE', allow404: true }); }
     catch (error) { console.warn('[tracker:pages] Could not remove old page:', error.message); }
   }
-  return { created, updated: !created, count: tokens.length, messageId: ids[0], pages: ids.length, ...highs };
+  return { created, updated: !created, count: tokens.length, messageId: ids[0], pages: ids.length, ...highs, ...rugs };
 }
