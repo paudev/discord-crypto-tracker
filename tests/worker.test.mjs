@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import worker, { refreshCryptoTracker, refreshRugWatch, runScheduledCycle, RUG_CHECK_OFFSET_MS } from '../worker/index.js';
+import worker, { refreshCryptoTracker } from '../worker/index.js';
 
 test('calls authenticated Vercel refresh every invocation', async () => {
   let called = null;
@@ -27,8 +27,8 @@ test('public Worker status reports deployed code and secret presence without lea
   assert.equal(response.status, 200);
   const status = await response.json();
   assert.equal(status.service, 'discord-crypto-tracker');
-  assert.equal(status.workerBuild, 'rug-30s-v2');
-  assert.match(status.rugPollInterval, /30 seconds/);
+  assert.equal(status.workerBuild, 'rug-60s-v3');
+  assert.match(status.rugPollInterval, /once per minute/);
   assert.equal(status.cronSchedule, '* * * * *');
   assert.equal(status.secretConfigured, true);
   assert.doesNotMatch(JSON.stringify(status), /example-super-secret-value/);
@@ -56,76 +56,22 @@ test('scheduled handler logs the invocation and refresh errors', async () => {
   }
 });
 
-test('authenticates the new rug-only endpoint without starting dashboard refresh', async () => {
-  let url, method, auth;
-  const status = await refreshRugWatch({ REFRESH_SECRET: 'example-super-secret-value-12345' },
-    async (request, options) => {
-      url=request;method=options.method;auth=options.headers.Authorization;
+
+test('one cron cycle makes only one refresh request (rug, dashboard and ATH together)', async () => {
+  const previousFetch=globalThis.fetch;
+  const requests=[];
+  try {
+    globalThis.fetch=async (url,options)=>{
+      requests.push({url,method:options.method});
       return {ok:true,status:200};
+    };
+    await worker.scheduled({cron:'* * * * *'},{
+      REFRESH_SECRET:'example-super-secret-value-12345',
     });
-  assert.equal(status,200);
-  assert.equal(url,'https://discord-crypto-tracker.vercel.app/api/rug-refresh');
-  assert.equal(method,'POST');
-  assert.equal(auth,'Bearer example-super-secret-value-12345');
-  await assert.rejects(refreshRugWatch({REFRESH_SECRET:'invalid'}),/REFRESH_SECRET/);
-  await assert.rejects(refreshRugWatch({REFRESH_SECRET:'example-super-secret-value-12345'},
-    async()=>({ok:false,status:502})),/HTTP 502/);
-});
-
-test('one scheduled invocation runs standard refresh and rug-only refresh 30 seconds apart',async()=>{
-  const urls=[],waits=[];
-  let clock=1000;
-  const result=await runScheduledCycle({REFRESH_SECRET:'example-super-secret-value-12345'},{
-    fetcher:async url=>{urls.push(url);return {ok:true,status:200,json:async()=>({rugEnabled:true})};},
-    sleep:async ms=>{waits.push(ms);clock+=ms;},
-    now:()=>clock,
-  });
-  assert.deepEqual(urls,[
-    'https://discord-crypto-tracker.vercel.app/api/refresh',
-    'https://discord-crypto-tracker.vercel.app/api/rug-refresh',
-  ]);
-  assert.deepEqual(waits,[RUG_CHECK_OFFSET_MS]);
-  assert.equal(result.rugPolled,true);
-  assert.equal(result.rugStatus,200);
-});
-
-test('slow primary refresh safely skips mid-minute poll before next cron',async()=>{
-  const urls=[],waits=[];
-  let clock=1000;
-  const result=await runScheduledCycle({REFRESH_SECRET:'example-super-secret-value-12345'},{
-    fetcher:async url=>{urls.push(url);clock+=46000;return {ok:true,status:200,json:async()=>({rugEnabled:true})};},
-    sleep:async ms=>waits.push(ms),
-    now:()=>clock,
-  });
-  assert.equal(result.rugPolled,false);
-  assert.equal(urls.length,1);
-  assert.deepEqual(waits,[]);
-});
-
-test('a slow but successful primary refresh sleeps only the remaining time',async()=>{
-  const waits=[];
-  let clock=1000;
-  const result=await runScheduledCycle({REFRESH_SECRET:'example-super-secret-value-12345'},{
-    fetcher:async url=>{
-      if(url.endsWith('/api/refresh'))clock+=12000;
-      return {ok:true,status:200,json:async()=>({rugEnabled:true})};
-    },
-    sleep:async ms=>{waits.push(ms);clock+=ms;},
-    now:()=>clock,
-  });
-  assert.deepEqual(waits,[18000]);
-  assert.equal(result.rugPolled,true);
-});
-
-test('disabled rug watch never makes an extra Vercel invocation',async()=>{
-  const urls=[],waits=[];
-  const result=await runScheduledCycle({REFRESH_SECRET:'example-super-secret-value-12345'},{
-    fetcher:async url=>{urls.push(url);return {ok:true,status:200,json:async()=>({rugEnabled:false})};},
-    sleep:async ms=>waits.push(ms),
-    now:()=>1000,
-  });
-  assert.equal(result.rugPolled,false);
-  assert.equal(result.reason,'rug-disabled');
-  assert.deepEqual(urls,['https://discord-crypto-tracker.vercel.app/api/refresh']);
-  assert.deepEqual(waits,[]);
+    assert.deepEqual(requests,[{
+      url:'https://discord-crypto-tracker.vercel.app/api/refresh',method:'POST',
+    }]);
+  }finally{
+    globalThis.fetch=previousFetch;
+  }
 });
