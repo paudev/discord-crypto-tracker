@@ -1,5 +1,6 @@
 import { CONFIG_MARKER, MAX_TOKENS, safeText } from './discord.js';
 import { fetchAllPairs } from './dexscreener.js';
+import { deflateRawSync, inflateRawSync } from 'node:zlib';
 
 const CONFIG_CHANNEL_NAME = 'crypto-tracker-data';
 const VIEW_CHANNEL = 1024n;
@@ -25,7 +26,10 @@ export function parseConfig(input) {
     }
     if (!raw) continue;
     try {
-      const data = JSON.parse(raw.slice(CONFIG_MARKER.length));
+      const encoded = raw.slice(CONFIG_MARKER.length);
+      const data = JSON.parse(encoded.startsWith('z:')
+        ? inflateRawSync(Buffer.from(encoded.slice(2), 'base64'), { maxOutputLength: 100_000 }).toString('utf8')
+        : encoded);
       if (data.version !== 1 || !Array.isArray(data.tokens) || data.tokens.length > MAX_TOKENS) continue;
       if (!/^\d{16,22}$/.test(data.dashboardChannelId)) continue;
       if (data.dashboardMessageId && !/^\d{16,22}$/.test(data.dashboardMessageId)) continue;
@@ -40,9 +44,11 @@ export function parseConfig(input) {
 }
 
 export function serializeConfig(config) {
-  const body = CONFIG_MARKER + JSON.stringify(config);
-  // The configuration is stored inside an embed spoiler (description limit
-  // 4096), not plain message content (2000). Leave room for watchlist labels.
+  const raw = CONFIG_MARKER + JSON.stringify(config);
+  // Keep older records readable; compress watchlists beyond 12 tokens.
+  const body = config.tokens?.length > 12 || raw.length > 2000
+    ? CONFIG_MARKER + 'z:' + deflateRawSync(Buffer.from(JSON.stringify(config))).toString('base64')
+    : raw;
   if (body.length > 3000) throw new Error('Watchlist configuration exceeds private storage embed limit.');
   return body;
 }
@@ -52,12 +58,14 @@ const STORAGE_MARKER = '[SpicyTracker storage]';
 
 export function createStorageEmbed(config) {
   const tokens = Array.isArray(config.tokens) ? config.tokens : [];
+  const visible = tokens.slice(0, 12);
   const listing = tokens.length
-    ? tokens.map((token, i) => {
+    ? visible.map((token, i) => {
         const address = String(token.address ?? "");
         const short = address.length > 22 ? `${address.slice(0, 8)}…${address.slice(-6)}` : address;
         return `${i + 1}. **${safeText(token.symbol || token.name, 24) || 'Unknown token'}** · \`${short}\``;
-      }).join("\n")
+      }).join("\n") + (tokens.length > visible.length
+        ? "\n*+" + (tokens.length - visible.length) + " more · Use /tracker list page:2*" : "")
     : "*No tokens are currently saved in this watchlist.*";
   return {
     title: "🔒 SpicyTracker · Private Storage",
@@ -215,7 +223,7 @@ export async function selectStorageChannel(client, { guildId, targetId, fallback
   for (const entry of configs) for (const token of entry.config.tokens) {
     tokenMap.set(`${token.chain}:${token.address}`, token);
   }
-  if (tokenMap.size > MAX_TOKENS) throw new Error('Combined tracked tokens exceed the 12-token limit; nothing was moved.');
+  if (tokenMap.size > MAX_TOKENS) throw new Error('Combined tracked tokens exceed the ' + MAX_TOKENS + '-token limit; nothing was moved.');
   const base = active?.config || { version: 1, dashboardChannelId: fallbackDashboardChannelId, dashboardMessageId: null, tokens: [] };
   if (!/^\d{16,22}$/.test(base.dashboardChannelId)) throw new Error('No valid dashboard channel configured.');
   if (base.dashboardChannelId === targetId) {
