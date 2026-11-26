@@ -610,6 +610,23 @@ export async function updateRugWatch(client, store, entries, { now } = {}) {
     const suspicious = liquidityDrop >= 0.95 ||
       (liquidityDrop >= 0.70 && priceDrop >= 0.50);
     const cooldown = lastAlert > 0 && clock.getTime() - lastAlert * 1000 < RUG_ALERT_COOLDOWN_MS;
+    const current = [poolKey, Math.round(liquidity * 100) / 100,
+      Number(price.toPrecision(9)), ts, lastAlert];
+    // Hold a reference point for up to 15 minutes, so gradual drains can
+    // accumulate. Avoid writing private storage on unchanged minute ticks.
+    if (!recent) {
+      token.r = current;
+      changed = true;
+      continue;
+    }
+    if (!healthy) {
+      if (liquidity >= RUG_MIN_BASE_LIQUIDITY_USD &&
+          liquidity > oldLiquidity * 1.25) {
+        token.r = current;
+        changed = true;
+      }
+      continue;
+    }
     let alertedAt = lastAlert;
     if (suspicious && !cooldown) {
       // Prevent mass alert spikes from exceeding serverless/Discord rate limits.
@@ -629,8 +646,12 @@ export async function updateRugWatch(client, store, entries, { now } = {}) {
         continue;
       }
     }
-    token.r = [poolKey, Math.round(liquidity * 100) / 100, Number(price.toPrecision(9)), ts, alertedAt];
-    changed = true;
+    // After a warning/cooldown reset the reference; otherwise retain the
+    // older sample until it expires or the pool becomes substantially deeper.
+    if (suspicious || liquidity > oldLiquidity * 1.25) {
+      token.r = [current[0], current[1], current[2], current[3], alertedAt];
+      changed = true;
+    }
   }
   if (changed) await saveStore(client, store);
   return { rugAlerts, rugEnabled: true };
