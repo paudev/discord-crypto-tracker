@@ -5,6 +5,7 @@ import { cleanupStores, createHighAlertEmbed, hydrateTokenSymbols, loadStore, pu
 const STRING = 3;
 const CHANNEL = 7;
 const NUMBER = 10;
+const INTEGER = 4;
 const SUBCOMMAND = 1;
 
 export const TRACKER_COMMAND = {
@@ -22,7 +23,9 @@ export const TRACKER_COMMAND = {
       { type: STRING, name: 'address', description: 'Token contract address', required: true },
       { type: STRING, name: 'chain', description: 'Blockchain (if the address is used on multiple networks)', required: false, choices: CHAIN_CHOICES },
     ] },
-    { type: SUBCOMMAND, name: 'list', description: 'Show the currently tracked token addresses' },
+    { type: SUBCOMMAND, name: 'list', description: 'Show tracked tokens (12 per page)', options: [
+      { type: INTEGER, name: 'page', description: 'Page number (default 1)', required: false, min_value: 1, max_value: 3 },
+    ] },
     { type: SUBCOMMAND, name: 'refresh', description: 'Refresh the token dashboard now' },
     { type: SUBCOMMAND, name: 'channel', description: 'Move the price dashboard to a text channel', options: [
       { type: CHANNEL, name: 'target', description: 'Where price updates should appear', required: true, channel_types: [0] },
@@ -35,7 +38,9 @@ export const TRACKER_COMMAND = {
       { type: NUMBER, name: 'min-increase', description: 'Minimum gain (at least 5%, default 5%)', required: false, min_value: 5, max_value: 100 },
     ] },
     { type: SUBCOMMAND, name: 'ath-off', description: 'Disable observed market-cap alerts' },
-    { type: SUBCOMMAND, name: 'ath-status', description: 'Show observed market-cap highs and alert channel' },
+    { type: SUBCOMMAND, name: 'ath-status', description: 'Show observed highs and alert channel', options: [
+      { type: INTEGER, name: 'page', description: 'Page number (default 1)', required: false, min_value: 1, max_value: 3 },
+    ] },
     { type: SUBCOMMAND, name: 'ath-set', description: 'Record an externally checked historical MC high', options: [
       { type: STRING, name: 'token', description: 'Tracked symbol or contract address', required: true },
       { type: NUMBER, name: 'market-cap', description: 'Historical high USD value, e.g. 48700', required: true, min_value: 0.01 },
@@ -51,7 +56,7 @@ export const TRACKER_COMMAND = {
 };
 
 
-const REGISTERED_COMMAND_REVISION = 4;
+const REGISTERED_COMMAND_REVISION = 6;
 
 /** Register newly added slash commands once from the existing authenticated refresh. */
 export async function syncTrackerCommandsIfNeeded(client, store, applicationId, guildId) {
@@ -181,7 +186,10 @@ export async function executeTrackerCommand({ interaction, client, applicationId
   }
   if (command.name === 'ath-status') {
     const target = store.config.athChannelId ? '<#' + store.config.athChannelId + '>' : 'Disabled';
-    const lines = store.config.tokens.map(t => {
+    const page = Number(optionValue(command, 'page')) || 1;
+    const pageCount = Math.max(1, Math.ceil(store.config.tokens.length / 12));
+    if (page > pageCount) return 'Page out of range (' + pageCount + ' total).';
+    const lines = store.config.tokens.slice((page - 1) * 12, page * 12).map(t => {
       const high = Number(t.h);
       const reference=Number(t.b);
       return (safeText(t.symbol||t.name,24)||'Unknown')+' · '+t.chain.toUpperCase()+
@@ -190,7 +198,7 @@ export async function executeTrackerCommand({ interaction, client, applicationId
     });
     return 'Observed market-cap highs\nChannel: ' + target +
       '\nMinimum increase: ' + Math.max(5,store.config.athMinPct??0) + '% · Cooldown: 30 minutes' +
-      '\n' + (lines.join('\n') || 'No tracked tokens') +
+      '\nPage ' + page + '/' + pageCount + '\n' + (lines.join('\n') || 'No tracked tokens') +
       '\nObserved highs are sampled; manually entered ATHs are not independently verified.';
   }
 
@@ -260,10 +268,18 @@ export async function executeTrackerCommand({ interaction, client, applicationId
 
   if (command.name === 'list') {
     await hydrateTokenSymbols(client, store, { fetcher });
-    if (!store.config.tokens.length) return `No tokens tracked yet. Dashboard: <#${store.config.dashboardChannelId}>.`;
-    return `**Tracked tokens (${store.config.tokens.length}/${MAX_TOKENS}):**\n` + store.config.tokens
-      .map((x, i) => `${i + 1}. **${safeText(x.symbol || x.name, 24) || 'Unknown token'}** · ${x.chain.toUpperCase()} · \`${x.address}\``).join('\n')
-      + `\nDashboard: <#${store.config.dashboardChannelId}> · Storage: <#${store.configChannelId}>`;
+    if (!store.config.tokens.length) return 'No tokens tracked yet. Dashboard: <#' + store.config.dashboardChannelId + '>.';
+    const page = Number(optionValue(command, 'page')) || 1;
+    const pageCount = Math.ceil(store.config.tokens.length / 12);
+    if (page > pageCount) return 'Page out of range (' + pageCount + ' total).';
+    const tick = String.fromCharCode(96);
+    const lines = store.config.tokens.slice((page - 1) * 12, page * 12)
+      .map((t, i) => ((page - 1) * 12 + i + 1) + '. **' +
+        (safeText(t.symbol || t.name, 24) || 'Unknown token') + '** · ' +
+        t.chain.toUpperCase() + ' · ' + tick + t.address + tick);
+    return '**Tracked tokens (' + store.config.tokens.length + '/' + MAX_TOKENS +
+      ') · Page ' + page + '/' + pageCount + ':**\n' + lines.join('\n') +
+      '\nDashboard: <#' + store.config.dashboardChannelId + '> · Storage: <#' + store.configChannelId + '>';
   }
   if (command.name === 'remove') {
     const address = String(optionValue(command, 'address') || '').trim();
@@ -283,21 +299,29 @@ export async function executeTrackerCommand({ interaction, client, applicationId
     if (channelId === store.configChannelId) return 'Storage and dashboard must use different channels.';
     const channels = await client.request(`/guilds/${guildId}/channels`);
     if (!channels.some(x => x.id === channelId && x.type === 0)) return 'The target must be a text channel in this server.';
-    const previous = { channelId: store.config.dashboardChannelId, messageId: store.config.dashboardMessageId };
+    const previous = { channelId: store.config.dashboardChannelId, messageId: store.config.dashboardMessageId,
+      messageIds: store.config.dashboardMessageIds };
+    delete store.config.dashboardMessageIds;
     store.config.dashboardChannelId = channelId;
     store.config.dashboardMessageId = null;
     await saveStore(client, store);
     try {
       await publishDashboard(client, store, { fetcher });
-      if (previous.messageId && previous.channelId !== channelId) {
-        try { await client.request(`/channels/${previous.channelId}/messages/${previous.messageId}`, { method: 'DELETE' }); }
-        catch (error) { console.warn('[tracker:old-dashboard]', error.message); }
+      if (previous.channelId !== channelId) {
+        const oldIds = previous.messageIds?.length ? previous.messageIds :
+          (previous.messageId ? [previous.messageId] : []);
+        for (const oldId of oldIds) {
+          try { await client.request('/channels/' + previous.channelId + '/messages/' + oldId, { method: 'DELETE' }); }
+          catch (error) { console.warn('[tracker:old-dashboard]', error.message); }
+        }
       }
       return `✅ Dashboard moved to <#${channelId}>.`;
     } catch (error) {
       // Restore the previous usable dashboard if a new channel is inaccessible.
       store.config.dashboardChannelId = previous.channelId;
       store.config.dashboardMessageId = previous.messageId;
+      if (previous.messageIds?.length) store.config.dashboardMessageIds = previous.messageIds;
+      else delete store.config.dashboardMessageIds;
       await saveStore(client, store);
       console.error('[tracker:channel]', error.message);
       return 'Could not post in that channel. The old dashboard is unchanged. Grant the bot Send Messages and Embed Links.';
