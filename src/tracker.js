@@ -46,7 +46,7 @@ export function parseConfig(input) {
 export function serializeConfig(config) {
   const raw = CONFIG_MARKER + JSON.stringify(config);
   // Keep older records readable; compress watchlists beyond 12 tokens.
-  const body = config.tokens?.length > 12 || raw.length > 2000
+  const body = config.tokens?.length > 12 || raw.length > 3000
     ? CONFIG_MARKER + 'z:' + deflateRawSync(Buffer.from(JSON.stringify(config))).toString('base64')
     : raw;
   if (body.length > 3000) throw new Error('Watchlist configuration exceeds private storage embed limit.');
