@@ -29,5 +29,10 @@ test('commands require server management permission', () => {
   assert.equal(isServerManager({ guild_id: '1', member: { permissions: '0' } }), false);
   assert.equal(isServerManager({ member: { permissions: '32' } }), false);
   assert.equal(TRACKER_COMMAND.default_member_permissions, '32');
-  assert.deepEqual(TRACKER_COMMAND.options.map(x => x.name), ['add', 'remove', 'list', 'refresh', 'channel', 'help']);
+  const names=TRACKER_COMMAND.options.map(x=>x.name);
+  for(const required of ['add','remove','list','refresh','channel','storage','ath-channel',
+    'ath-preview','ath-set','rug-channel','rug-preview','rug-off','rug-status','help']) {
+    assert.ok(names.includes(required), 'Missing slash command '+required);
+  }
+  assert.equal(new Set(names).size,names.length);
 });
