@@ -36,14 +36,35 @@ export async function fetchTokenPair(token, fetcher = globalThis.fetch) {
 }
 
 export async function fetchAllPairs(tokens, fetcher = globalThis.fetch) {
-  // A bounded number of independent requests, without overwhelming the free API.
-  const results = [];
-  for (let i = 0; i < tokens.length; i += 4) {
-    const batch = await Promise.all(tokens.slice(i, i + 4).map(async token => {
-      try { return { token, pair: await fetchTokenPair(token, fetcher) }; }
-      catch (error) { return { token, pair: null, error: error.message }; }
-    }));
-    results.push(...batch);
-  }
+  // Batch up to 30 token addresses per chain to reduce requests per minute.
+  const results = new Array(tokens.length), grouped = new Map();
+  tokens.forEach((token, index) => {
+    const list = grouped.get(token.chain) || [];
+    list.push({ token, index });
+    grouped.set(token.chain, list);
+  });
+  const batches = [];
+  for (const [chain, items] of grouped)
+    for (let i = 0; i < items.length; i += 30) batches.push({ chain, items: items.slice(i, i + 30) });
+  await Promise.all(batches.map(async ({ chain, items }) => {
+    try {
+      if (items.length === 1) {
+        const { token, index } = items[0];
+        results[index] = { token, pair: await fetchTokenPair(token, fetcher) };
+        return;
+      }
+      const addresses = items.map(({ token }) => normalizeToken(token.chain, token.address).address);
+      const url = DEX_API + '/tokens/v1/' + chain + '/' + addresses.map(encodeURIComponent).join(',');
+      const response = await fetcher(url, {
+        headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(11000),
+      });
+      if (!response.ok) throw new Error('DEX Screener returned HTTP ' + response.status);
+      const pairs = await response.json();
+      if (!Array.isArray(pairs)) throw new Error('DEX Screener returned invalid token data');
+      for (const { token, index } of items) results[index] = { token, pair: selectBestPair(pairs, token) };
+    } catch (error) {
+      for (const { token, index } of items) results[index] = { token, pair: null, error: error.message };
+    }
+  }));
   return results;
 }
