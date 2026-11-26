@@ -10,22 +10,32 @@ const MANAGE_CHANNELS = 16n;
 const EMBED_COLOR = 0x5865f2;
 
 export function parseConfig(input) {
-  const sources = typeof input === "string" ? [input] : [
-    input?.content,
-    ...(Array.isArray(input?.embeds) ? input.embeds.map(embed => embed?.description) : []),
+  const sources = typeof input === 'string' ? [{ text: input, fields: [] }] : [
+    { text: input?.content, fields: [] },
+    ...(Array.isArray(input?.embeds) ? input.embeds.map(embed =>
+      ({ text: embed?.description, fields: embed?.fields || [] })) : []),
   ];
-  for (const candidate of sources) {
-    const text = String(candidate ?? "");
+  for (const source of sources) {
+    const text = String(source.text ?? '');
     let raw = text.startsWith(CONFIG_MARKER) ? text : null;
     if (!raw) {
-      const start = text.indexOf("||" + CONFIG_MARKER);
+      const start = text.indexOf('||' + CONFIG_MARKER);
       if (start >= 0) {
-        const end = text.indexOf("||", start + 2);
+        const end = text.indexOf('||', start + 2);
         if (end >= 0) raw = text.slice(start + 2, end);
       }
     }
     if (!raw) continue;
     try {
+      // Large 25-token watchlists append compressed-data chunks in embed fields.
+      if (raw.startsWith(CONFIG_MARKER + 'z:') && Array.isArray(source.fields)) {
+        const rest = source.fields.filter(f => String(f.name).startsWith('Config continuation '));
+        for (const field of rest) {
+          const value = String(field.value ?? '');
+          if (!value.startsWith('||') || !value.endsWith('||')) throw new Error('Invalid config continuation');
+          raw += value.slice(2, -2);
+        }
+      }
       const encoded = raw.slice(CONFIG_MARKER.length);
       const data = JSON.parse(encoded.startsWith('z:')
         ? inflateRawSync(Buffer.from(encoded.slice(2), 'base64'), { maxOutputLength: 100_000 }).toString('utf8')
@@ -33,7 +43,11 @@ export function parseConfig(input) {
       if (data.version !== 1 || !Array.isArray(data.tokens) || data.tokens.length > MAX_TOKENS) continue;
       if (!/^\d{16,22}$/.test(data.dashboardChannelId)) continue;
       if (data.dashboardMessageId && !/^\d{16,22}$/.test(data.dashboardMessageId)) continue;
+      if (data.dashboardMessageIds != null &&
+          (!Array.isArray(data.dashboardMessageIds) || data.dashboardMessageIds.length > 5 ||
+           !data.dashboardMessageIds.every(id => /^\d{16,22}$/.test(String(id))))) continue;
       if (data.athChannelId != null && !/^\d{16,22}$/.test(data.athChannelId)) continue;
+      if (data.rugChannelId != null && !/^\d{16,22}$/.test(data.rugChannelId)) continue;
       if (data.athMinPct != null && (!Number.isFinite(data.athMinPct) || data.athMinPct < 0 || data.athMinPct > 100)) continue;
       return data;
     } catch {
@@ -45,11 +59,11 @@ export function parseConfig(input) {
 
 export function serializeConfig(config) {
   const raw = CONFIG_MARKER + JSON.stringify(config);
-  // Keep older records readable; compress watchlists beyond 12 tokens.
+  // Backwards-compatible legacy JSON; compress large 13-25 token watchlists.
   const body = config.tokens?.length > 12 || raw.length > 3000
     ? CONFIG_MARKER + 'z:' + deflateRawSync(Buffer.from(JSON.stringify(config))).toString('base64')
     : raw;
-  if (body.length > 3000) throw new Error('Watchlist configuration exceeds private storage embed limit.');
+  if (body.length > 5500) throw new Error('Watchlist exceeds available private storage space.');
   return body;
 }
 
@@ -58,35 +72,50 @@ const STORAGE_MARKER = '[SpicyTracker storage]';
 
 export function createStorageEmbed(config) {
   const tokens = Array.isArray(config.tokens) ? config.tokens : [];
-  const visible = tokens.slice(0, 12);
+  // For large watchlists keep the private preview short to reserve space for
+  // full, lossless compressed configuration and recorded ATH/rug history.
+  const visible = tokens.slice(0, tokens.length > 12 ? 5 : 12);
   const listing = tokens.length
     ? visible.map((token, i) => {
-        const address = String(token.address ?? "");
-        const short = address.length > 22 ? `${address.slice(0, 8)}…${address.slice(-6)}` : address;
-        return `${i + 1}. **${safeText(token.symbol || token.name, 24) || 'Unknown token'}** · \`${short}\``;
-      }).join("\n") + (tokens.length > visible.length
-        ? "\n*+" + (tokens.length - visible.length) + " more · Use /tracker list page:2*" : "")
-    : "*No tokens are currently saved in this watchlist.*";
-  return {
-    title: "🔒 SpicyTracker · Private Storage",
-    color: 0x5865f2,
-    // Discord always renders description before fields, so keep all visible
-    // settings above the private JSON spoiler in the description itself.
-    description: [
-      "This message stores your tracker settings. You can move this channel or restrict who can see it.",
-      "",
-      `**Tracked tokens**  **${tokens.length} / ${MAX_TOKENS}**   ·   **Price dashboard**  <#${config.dashboardChannelId}>`,
-      `**Observed-high alerts**  ${config.athChannelId ? `<#${config.athChannelId}>` : 'Off'}`,
-      "",
-      "**Watchlist**",
-      listing,
-      "",
-      "**Internal configuration (click to reveal)**",
-      `||${serializeConfig(config)}||`,
-    ].join("\n"),
-    footer: { text: "Managed by SpicyTracker · Do not delete or edit this message" },
-  };
+        const address = String(token.address ?? '');
+        const short = address.length > 22 ? address.slice(0, 8) + '…' + address.slice(-6) : address;
+        return (i + 1) + '. **' + (safeText(token.symbol || token.name, 24) || 'Unknown token') +
+          '** · ' + String.fromCharCode(96) + short + String.fromCharCode(96);
+      }).join('\n') + (tokens.length > visible.length
+        ? '\n*+' + (tokens.length - visible.length) + ' more · Use /tracker list*' : '')
+    : '*No tokens are currently saved in this watchlist.*';
+  const title = '🔒 SpicyTracker · Private Storage';
+  const footer = { text: 'Managed by SpicyTracker · Do not delete or edit this message' };
+  const heading = [
+    'This message stores your tracker settings. You can move this channel or restrict who can see it.',
+    '',
+    '**Tracked tokens**  **' + tokens.length + ' / ' + MAX_TOKENS + '**   ·   **Price dashboard**  <#' +
+      config.dashboardChannelId + '>',
+    '**Observed-high alerts**  ' + (config.athChannelId ? '<#' + config.athChannelId + '>' : 'Off'),
+    '**Rug watch**  ' + (config.rugChannelId ? '<#' + config.rugChannelId + '>' : 'Off'),
+    '',
+    '**Watchlist**',
+    listing,
+    '',
+    '**Internal configuration (click to reveal)**',
+    '',
+  ].join('\n');
+  const configText = serializeConfig(config);
+  const firstSize = Math.max(0, 4096 - heading.length - 4);
+  const first = configText.slice(0, firstSize);
+  const remaining = configText.slice(firstSize);
+  const fields = [];
+  for (let i = 0; i < remaining.length; i += 1000) {
+    fields.push({ name: 'Config continuation ' + (fields.length + 1),
+      value: '||' + remaining.slice(i, i + 1000) + '||', inline: false });
+  }
+  const description = heading + '||' + first + '||';
+  const totalChars = title.length + description.length + footer.text.length +
+    fields.reduce((sum, field) => sum + field.name.length + field.value.length, 0);
+  if (totalChars > 6000) throw new Error('Watchlist configuration exceeds Discord storage limits.');
+  return { title, color: 0x5865f2, description, ...(fields.length ? { fields } : {}), footer };
 }
+
 
 function isFormattedStorageMessage(message) {
   return Array.isArray(message?.embeds) && message.embeds.some(embed => {
@@ -561,6 +590,8 @@ export async function updateRugWatch(client, store, entries, { now } = {}) {
     const liquidity = pair.liquidity?.usd == null ? NaN : Number(pair.liquidity.usd);
     const price = pair.priceUsd == null ? NaN : Number(pair.priceUsd);
     const address = String(pair.pairAddress || '');
+    // A compact pool fingerprint keeps 25-token private storage manageable.
+    const poolKey = address.length > 20 ? address.slice(0, 8) + address.slice(-8) : address;
     if (!address || !Number.isFinite(liquidity) || liquidity < 0 ||
         !Number.isFinite(price) || price <= 0) continue;
     // Compact persistent sample: [pair, liquidityUsd, priceUsd, sampledAt, alertedAt].
@@ -568,7 +599,7 @@ export async function updateRugWatch(client, store, entries, { now } = {}) {
     const lastAlert = Number(prior?.[4]) || 0;
     const oldLiquidity = Number(prior?.[1]);
     const oldPrice = Number(prior?.[2]);
-    const samePool = prior?.[0] === address;
+    const samePool = prior?.[0] === poolKey;
     const ageMs = (ts - (Number(prior?.[3]) || 0)) * 1000;
     const recent = samePool && ageMs > 0 && ageMs <= RUG_MAX_SAMPLE_GAP_MS;
     const healthy = oldLiquidity >= RUG_MIN_BASE_LIQUIDITY_USD &&
@@ -598,7 +629,7 @@ export async function updateRugWatch(client, store, entries, { now } = {}) {
         continue;
       }
     }
-    token.r = [address, liquidity, price, ts, alertedAt];
+    token.r = [poolKey, Math.round(liquidity * 100) / 100, Number(price.toPrecision(9)), ts, alertedAt];
     changed = true;
   }
   if (changed) await saveStore(client, store);
