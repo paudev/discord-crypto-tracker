@@ -498,3 +498,35 @@ test('historical ATH command saves reference independently of observed highs',as
   const status=await executeTrackerCommand({interaction:interaction('ath-status'),client,applicationId:APP});
   assert.match(status,/entered ATH \$48,700/);
 });
+
+
+test('rug-channel, status, preview and off keep warnings in the chosen channel', async () => {
+  const client=createFakeDiscord();
+  const rug='623456789012345678';
+  client.channels.push({id:rug,name:'rug-alerts',type:0});
+  await selectStorageChannel(client, {guildId:GUILD,targetId:PRIVATE,fallbackDashboardChannelId:GENERAL});
+  const stored=await loadStore(client,GUILD);
+  stored.config.tokens=[{chain:'solana',address:SOL,symbol:'DREAD'}];
+  await saveStore(client,stored);
+  const enabled=await executeTrackerCommand({
+    interaction:interaction('rug-channel',[opt('target',rug)]),client,applicationId:APP,
+  });
+  assert.match(enabled,/Rug watch enabled/);
+  assert.equal((await loadStore(client,GUILD)).config.rugChannelId,rug);
+  const status=await executeTrackerCommand({
+    interaction:interaction('rug-status'),client,applicationId:APP,
+  });
+  assert.match(status,/Suspected rug watch/);
+  assert.match(status,/95%/);
+  const preview=await executeTrackerCommand({
+    interaction:interaction('rug-preview'),client,applicationId:APP,fetcher:pairResponse,
+  });
+  assert.equal(preview.embeds[0].title,'TEST · Suspected rug warning');
+  assert.equal(client.messages.get(rug).length,1);
+  assert.match(client.messages.get(rug)[0].embeds[0].footer.text,/Simulation only/);
+  const disabled=await executeTrackerCommand({
+    interaction:interaction('rug-off'),client,applicationId:APP,
+  });
+  assert.match(disabled,/disabled/);
+  assert.equal((await loadStore(client,GUILD)).config.rugChannelId,null);
+});
