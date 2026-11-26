@@ -190,3 +190,15 @@ test('high-entropy 25-token configuration survives multi-field private storage',
   assert.ok(total<=6000);
   assert.deepEqual(parseConfig({embeds:[embed]}),config);
 });
+
+
+test('liquidity drains across several minute samples trigger from the 15-minute baseline',async()=>{
+  const f=fixture(),token=f.store.config.tokens[0];
+  const time=minute=>({now:()=>new Date('2026-11-26T00:'+minute+':00Z')});
+  await updateRugWatch(f.client,f.store,sample(token,{liq:12000,price:0.004}),time('00'));
+  await updateRugWatch(f.client,f.store,sample(token,{liq:9500,price:0.003}),time('05'));
+  await updateRugWatch(f.client,f.store,sample(token,{liq:6000,price:0.002}),time('09'));
+  const result=await updateRugWatch(f.client,f.store,sample(token,{liq:3400,price:0.0008}),time('12'));
+  assert.equal(result.rugAlerts,1);
+  assert.equal(f.sent.length,1);
+});
