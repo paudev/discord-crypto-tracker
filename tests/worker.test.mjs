@@ -76,7 +76,7 @@ test('one scheduled invocation runs standard refresh and rug-only refresh 30 sec
   const urls=[],waits=[];
   let clock=1000;
   const result=await runScheduledCycle({REFRESH_SECRET:'example-super-secret-value-12345'},{
-    fetcher:async url=>{urls.push(url);return {ok:true,status:200};},
+    fetcher:async url=>{urls.push(url);return {ok:true,status:200,json:async()=>({rugEnabled:true})};},
     sleep:async ms=>{waits.push(ms);clock+=ms;},
     now:()=>clock,
   });
@@ -93,7 +93,7 @@ test('slow primary refresh safely skips mid-minute poll before next cron',async(
   const urls=[],waits=[];
   let clock=1000;
   const result=await runScheduledCycle({REFRESH_SECRET:'example-super-secret-value-12345'},{
-    fetcher:async url=>{urls.push(url);clock+=46000;return {ok:true,status:200};},
+    fetcher:async url=>{urls.push(url);clock+=46000;return {ok:true,status:200,json:async()=>({rugEnabled:true})};},
     sleep:async ms=>waits.push(ms),
     now:()=>clock,
   });
@@ -108,11 +108,24 @@ test('a slow but successful primary refresh sleeps only the remaining time',asyn
   const result=await runScheduledCycle({REFRESH_SECRET:'example-super-secret-value-12345'},{
     fetcher:async url=>{
       if(url.endsWith('/api/refresh'))clock+=12000;
-      return {ok:true,status:200};
+      return {ok:true,status:200,json:async()=>({rugEnabled:true})};
     },
     sleep:async ms=>{waits.push(ms);clock+=ms;},
     now:()=>clock,
   });
   assert.deepEqual(waits,[18000]);
   assert.equal(result.rugPolled,true);
+});
+
+test('disabled rug watch never makes an extra Vercel invocation',async()=>{
+  const urls=[],waits=[];
+  const result=await runScheduledCycle({REFRESH_SECRET:'example-super-secret-value-12345'},{
+    fetcher:async url=>{urls.push(url);return {ok:true,status:200,json:async()=>({rugEnabled:false})};},
+    sleep:async ms=>waits.push(ms),
+    now:()=>1000,
+  });
+  assert.equal(result.rugPolled,false);
+  assert.equal(result.reason,'rug-disabled');
+  assert.deepEqual(urls,['https://discord-crypto-tracker.vercel.app/api/refresh']);
+  assert.deepEqual(waits,[]);
 });
