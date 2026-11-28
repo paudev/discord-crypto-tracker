@@ -1,6 +1,6 @@
 import { CHAIN_CHOICES, MAX_TOKENS, safeText } from './discord.js';
 import { normalizeToken, fetchTokenPair } from './dexscreener.js';
-import { cleanupStores, createHighAlertEmbed, createRugAlertEmbed, hydrateTokenSymbols, loadStore, publishDashboard, saveStore, selectStorageChannel } from './tracker.js';
+import { cleanupStores, createHighAlertEmbed, createRugAlertEmbed, createSelloffAlertEmbed, hydrateTokenSymbols, loadStore, publishDashboard, saveStore, selectStorageChannel } from './tracker.js';
 
 const STRING = 3;
 const CHANNEL = 7;
@@ -32,6 +32,15 @@ export const TRACKER_COMMAND = {
     ] },
     { type: SUBCOMMAND, name: 'storage', description: 'Choose an existing private text channel for tracker data', options: [
       { type: CHANNEL, name: 'target', description: 'Your private data channel (move it and set role permissions in Discord)', required: true, channel_types: [0] },
+    ] },
+    { type: SUBCOMMAND, name: 'selloff-channel', description: 'Choose a channel for large selling-pressure warnings', options: [
+      { type: CHANNEL, name: 'target', description: 'Text channel for selloff alerts (may be the rug channel)', required: true, channel_types: [0] },
+    ] },
+    { type: SUBCOMMAND, name: 'selloff-off', description: 'Disable large selloff alerts without changing rug alerts' },
+    { type: SUBCOMMAND, name: 'selloff-status', description: 'Show large selloff thresholds, cooldown and channel' },
+    { type: SUBCOMMAND, name: 'selloff-preview', description: 'Preview the exact live-format large selloff card', options: [
+      { type: STRING, name: 'token', description: 'Tracked symbol or contract address (defaults to first)', required: false },
+      { type: CHANNEL, name: 'target', description: 'Preview channel (defaults to configured selloff channel)', required: false, channel_types: [0] },
     ] },
     { type: SUBCOMMAND, name: 'rug-channel', description: 'Warn about likely liquidity-pull rugs in a text channel', options: [
       { type: CHANNEL, name: 'target', description: 'Channel for suspected rug warnings', required: true, channel_types: [0] },
@@ -65,7 +74,7 @@ export const TRACKER_COMMAND = {
 };
 
 
-const REGISTERED_COMMAND_REVISION = 6;
+const REGISTERED_COMMAND_REVISION = 7;
 
 /** Register newly added slash commands once from the existing authenticated refresh. */
 export async function syncTrackerCommandsIfNeeded(client, store, applicationId, guildId) {
@@ -106,6 +115,8 @@ const helpText = [
   '• `/tracker ath-off` — disable alerts',
   '• `/tracker rug-channel target:#rug-alerts` — warn on severe liquidity collapse',
   '• `/tracker rug-status` · `/tracker rug-preview` · `/tracker rug-off` — manage and test rug watch',
+  '• `/tracker selloff-channel target:#your-channel` — large selloff alerts (can share Rug Watch channel)',
+  '• `/tracker selloff-status` · `/tracker selloff-preview` · `/tracker selloff-off` — manage and test selloffs',
   '• `/tracker channel target:#crypto-prices` — move the public dashboard',
   '• `/tracker storage target:#my-private-channel` — choose the private storage channel; set roles/categories in Discord',
   '• `/tracker cleanup` — merge watchlists and remove safe duplicate bot-created storage channels',
@@ -174,6 +185,72 @@ export async function executeTrackerCommand({ interaction, client, applicationId
   // Upgrade legacy raw JSON storage to a readable embed without posting to the price dashboard.
   if (store.needsMigration) await saveStore(client, store);
 
+  if (command.name === 'selloff-channel') {
+    const channelId = optionValue(command, 'target');
+    if (!/^\d{16,22}$/.test(String(channelId ?? ''))) return 'Choose a valid text channel.';
+    if (channelId === store.configChannelId) return 'Selloff alerts cannot go to the private storage channel.';
+    const channels = await client.request('/guilds/' + guildId + '/channels');
+    if (!Array.isArray(channels) || !channels.some(c => c.id === channelId && c.type === 0)) {
+      return 'Choose an existing text channel in this server.';
+    }
+    store.config.selloffChannelId = channelId;
+    await saveStore(client, store);
+    return '✅ Large Selloff alerts enabled in <#' + channelId +
+      '>. Rapid: ≥20% price drop in 5m, ≥20 transactions and ≥2 sells per buy. ' +
+      'Sustained: ≥35% price drop in 1h, ≥50 transactions and ≥2 sells per buy. ' +
+      '60-minute per-token cooldown. Rug Watch and ATH alert channels are unchanged.';
+  }
+  if (command.name === 'selloff-off') {
+    store.config.selloffChannelId = null;
+    await saveStore(client, store);
+    return '✅ Large Selloff alerts disabled. Rug Watch, ATH alerts and existing alert history are unchanged.';
+  }
+  if (command.name === 'selloff-status') {
+    const last = store.config.tokens.filter(t => Number(t.s) > 0).length;
+    return '**Large Selloff alerts**\nChannel: ' +
+      (store.config.selloffChannelId ? '<#' + store.config.selloffChannelId + '>' : 'Disabled') +
+      '\nTracked tokens: ' + store.config.tokens.length + '/' + MAX_TOKENS +
+      '\nRapid: ≥20% price drop in 5m, ≥20 trades and ≥2 sell transactions per buy' +
+      '\nSustained: ≥35% price drop in 1h, ≥50 trades and ≥2 sell transactions per buy' +
+      '\nCooldown: 60 minutes per token · Previously alerted tokens: ' + last +
+      '\nChecks once per minute with the dashboard. Buy/sell counts are transactions, not dollar volume.' +
+      '\nThis warns about selling pressure, not proven rug pulls.';
+  }
+  if (command.name === 'selloff-preview') {
+    const channelId = optionValue(command, 'target') || store.config.selloffChannelId || interaction.channel_id;
+    if (!/^\d{16,22}$/.test(String(channelId ?? ''))) return 'Choose a valid text channel.';
+    if (channelId === store.configChannelId) return 'Previews cannot go to the private storage channel.';
+    const channels = await client.request('/guilds/' + guildId + '/channels');
+    if (!Array.isArray(channels) || !channels.some(c => c.id === channelId && c.type === 0)) {
+      return 'Choose an existing text channel in this server.';
+    }
+    if (!store.config.tokens.length) return 'Add a tracked token first.';
+    const search = String(optionValue(command, 'token') || '').trim();
+    const matches = search ? findTracked(store.config.tokens, search) : [store.config.tokens[0]];
+    if (!matches.length) return 'No matching tracked token.';
+    if (matches.length > 1) return 'Multiple tokens share a symbol; use the contract address.';
+    let pair;
+    try { pair = await fetchTokenPair(matches[0], fetcher); }
+    catch (error) { return 'Could not load current market data for the selloff preview.'; }
+    if (!pair || !(Number(pair.priceUsd) > 0)) return 'A live priced pool is needed for a preview.';
+    // Synthetic rolling-window conditions, real token identity/price.
+    // The embed is built with the identical renderer used for real alerts.
+    const simulated = { ...pair,
+      priceChange: { ...pair.priceChange, m5: -25 },
+      txns: { ...pair.txns, m5: { buys: 12, sells: 48 } },
+    };
+    const signal = { window: 'm5', priceChange: -25, buys: 12, sells: 48 };
+    const embed = createSelloffAlertEmbed(matches[0], simulated, signal, new Date());
+    const notice = '⚠️ Preview only — simulated selloff activity; no live selloff detected.';
+    try {
+      await client.request('/channels/' + channelId + '/messages', {
+        method: 'POST', body: { content: notice, embeds: [embed], allowed_mentions: { parse: [] } },
+      });
+    } catch (error) {
+      return 'Could not send the preview. Grant SpicyTracker Send Messages and Embed Links in that channel.';
+    }
+    return { content: notice, embeds: [embed] };
+  }
   if (command.name === 'rug-channel') {
     const channelId = optionValue(command, 'target');
     if (!/^\d{16,22}$/.test(String(channelId ?? ''))) return 'Select a valid text channel.';

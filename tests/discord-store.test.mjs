@@ -457,6 +457,9 @@ test('authenticated refresh registers the ATH preview slash command once and rem
       const command=opts.body[0];
       assert.equal(command.name,'tracker');
       assert.ok(command.options.some(x=>x.name==='ath-preview'));
+      assert.ok(command.options.some(x=>x.name==='selloff-channel'));
+      assert.ok(command.options.some(x=>x.name==='selloff-preview'));
+      assert.ok(command.options.length<=25);
       return [{name:'tracker'}];
     }
     return original(path,opts);
@@ -464,7 +467,7 @@ test('authenticated refresh registers the ATH preview slash command once and rem
   const store=await loadStore(client,GUILD);
   assert.equal(await syncTrackerCommandsIfNeeded(client,store,APP,GUILD),true);
   assert.equal(puts,1);
-  assert.equal((await loadStore(client,GUILD)).config.cv,6);
+  assert.equal((await loadStore(client,GUILD)).config.cv,7);
   assert.equal(await syncTrackerCommandsIfNeeded(client,store,APP,GUILD),false);
   assert.equal(puts,1);
 });
@@ -537,4 +540,79 @@ test('rug-channel, status, preview and off keep warnings in the chosen channel',
   });
   assert.match(disabled,/disabled/);
   assert.equal((await loadStore(client,GUILD)).config.rugChannelId,null);
+});
+
+
+test('selloff channel can be selected independently of Rug Watch or ATH, including shared channel',async()=>{
+  const client=createFakeDiscord();
+  const selloff='623456789012345678';
+  const rug='723456789012345678';
+  client.channels.push({id:selloff,name:'selling-alerts',type:0});
+  client.channels.push({id:rug,name:'liquidity-alerts',type:0});
+  await selectStorageChannel(client,{guildId:GUILD,targetId:PRIVATE,fallbackDashboardChannelId:GENERAL});
+  const rugEnabled=await executeTrackerCommand({
+    interaction:interaction('rug-channel',[opt('target',rug)]),client,applicationId:APP,
+  });
+  assert.match(rugEnabled,/Rug watch enabled/);
+  const enabled=await executeTrackerCommand({
+    interaction:interaction('selloff-channel',[opt('target',selloff)]),client,applicationId:APP,
+  });
+  assert.match(enabled,/Large Selloff alerts enabled/);
+  let cfg=(await loadStore(client,GUILD)).config;
+  assert.equal(cfg.rugChannelId,rug);
+  assert.equal(cfg.selloffChannelId,selloff);
+  const status=await executeTrackerCommand({interaction:interaction('selloff-status'),client,applicationId:APP});
+  assert.match(status,/Channel: <#623456789012345678>/);
+  assert.match(status,/60 minutes/);
+  const same=await executeTrackerCommand({
+    interaction:interaction('selloff-channel',[opt('target',rug)]),client,applicationId:APP,
+  });
+  assert.match(same,/Large Selloff alerts enabled/);
+  cfg=(await loadStore(client,GUILD)).config;
+  assert.equal(cfg.selloffChannelId,rug);
+  assert.equal(cfg.rugChannelId,rug);
+  const off=await executeTrackerCommand({interaction:interaction('selloff-off'),client,applicationId:APP});
+  assert.match(off,/disabled/);
+  cfg=(await loadStore(client,GUILD)).config;
+  assert.equal(cfg.selloffChannelId,null);
+  assert.equal(cfg.rugChannelId,rug);
+});
+test('selloff channel refuses private storage, invalid IDs, or non-text channel',async()=>{
+  const client=createFakeDiscord();
+  await selectStorageChannel(client,{guildId:GUILD,targetId:PRIVATE,fallbackDashboardChannelId:GENERAL});
+  const invalid=await executeTrackerCommand({interaction:interaction('selloff-channel',[opt('target','banana')]),client,applicationId:APP});
+  assert.match(invalid,/valid text channel/);
+  const privateResult=await executeTrackerCommand({interaction:interaction('selloff-channel',[opt('target',PRIVATE)]),client,applicationId:APP});
+  assert.match(privateResult,/private storage/);
+  const unknown=await executeTrackerCommand({interaction:interaction('selloff-channel',[opt('target','823456789012345678')]),client,applicationId:APP});
+  assert.match(unknown,/existing text channel/);
+  assert.equal((await loadStore(client,GUILD)).config.selloffChannelId,undefined);
+});
+test('selloff preview uses the exact real warning embed and does not change cooldown',async()=>{
+  const client=createFakeDiscord();
+  const selloff='623456789012345678';
+  client.channels.push({id:selloff,name:'selloff-alerts',type:0});
+  await selectStorageChannel(client,{guildId:GUILD,targetId:PRIVATE,fallbackDashboardChannelId:GENERAL});
+  const store=await loadStore(client,GUILD);
+  store.config.selloffChannelId=selloff;
+  store.config.tokens=[{chain:'solana',address:SOL,symbol:'DREAD',s:1790000000}];
+  await saveStore(client,store);
+  const before=JSON.stringify((await loadStore(client,GUILD)).config);
+  const result=await executeTrackerCommand({
+    interaction:interaction('selloff-preview'),client,applicationId:APP,fetcher:pairResponse,
+  });
+  assert.equal(result.embeds[0].title,'🟥 Large Selloff Detected');
+  assert.match(result.content,/Preview only/);
+  const posted=client.messages.get(selloff)[0];
+  assert.deepEqual(posted.embeds[0],result.embeds[0]);
+  assert.equal(posted.content,result.content);
+  assert.doesNotMatch(JSON.stringify(posted.embeds),/Preview only|Simulation only|TEST/);
+  assert.deepEqual(posted.allowed_mentions.parse,[]);
+  assert.match(posted.embeds[0].description,/Price change \(5 minutes\): \*\*-25\.00%\*\*/);
+  assert.equal(JSON.stringify((await loadStore(client,GUILD)).config),before);
+  const privateResult=await executeTrackerCommand({
+    interaction:interaction('selloff-preview',[opt('target',PRIVATE)]),
+    client,applicationId:APP,fetcher:pairResponse,
+  });
+  assert.match(privateResult,/private storage/);
 });
