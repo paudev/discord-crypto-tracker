@@ -459,6 +459,7 @@ test('authenticated refresh registers the ATH preview slash command once and rem
       assert.ok(command.options.some(x=>x.name==='ath-preview'));
       assert.ok(command.options.some(x=>x.name==='selloff-channel'));
       assert.ok(command.options.some(x=>x.name==='selloff-preview'));
+      assert.ok(command.options.some(x=>x.name==='alert-diagnostics'));
       assert.ok(command.options.length<=25);
       return [{name:'tracker'}];
     }
@@ -467,7 +468,7 @@ test('authenticated refresh registers the ATH preview slash command once and rem
   const store=await loadStore(client,GUILD);
   assert.equal(await syncTrackerCommandsIfNeeded(client,store,APP,GUILD),true);
   assert.equal(puts,1);
-  assert.equal((await loadStore(client,GUILD)).config.cv,7);
+  assert.equal((await loadStore(client,GUILD)).config.cv,8);
   assert.equal(await syncTrackerCommandsIfNeeded(client,store,APP,GUILD),false);
   assert.equal(puts,1);
 });
