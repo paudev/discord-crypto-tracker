@@ -8,7 +8,8 @@
   },
   "scripts": {
     "test": "node --test tests/*.test.mjs",
-    "check": "node --check api/interactions.js && node --check api/refresh.js && node --check api/rug-refresh.js && node --check api/register.js && node --check src/tracker.js && node --check src/discord.js && node --check src/dexscreener.js && node --check src/commands.js && node --check worker/index.js"
+    "check": "node --check api/interactions.js && node --check api/refresh.js && node --check api/rug-refresh.js && node --check api/register.js && node --check src/tracker.js && node --check src/discord.js && node --check src/dexscreener.js && node --check src/commands.js && node --check worker/index.js",
+    "build": "npm test && npm run check && mkdir -p public && printf 'tracker checks passed' > public/check.txt"
   },
   "dependencies": {
     "@vercel/functions": "3.11.3"
