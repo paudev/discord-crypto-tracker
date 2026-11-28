@@ -455,7 +455,7 @@ export function createDashboardPages(entries, clock = new Date()) {
 
 function dashboardMessageContent(){return "";}
 
-export async function hydrateTokenSymbols(client,store,{fetcher,entries}={}){
+export async function hydrateTokenSymbols(client,store,{fetcher,entries,persist=true}={}){
  const missing=store.config.tokens.filter(x=>!safeText(x.symbol,24));
  const pairs=entries||(missing.length?await fetchAllPairs(missing,fetcher):[]);
  let changed=false;
@@ -463,7 +463,7 @@ export async function hydrateTokenSymbols(client,store,{fetcher,entries}={}){
   const symbol=safeText(pair?.baseToken?.symbol,24);
   if(symbol&&symbol!==token.symbol){token.symbol=symbol;changed=true;}
  }
- if(changed)await saveStore(client,store);
+ if(changed&&persist)await saveStore(client,store);
  return changed;
 }
 
@@ -501,7 +501,7 @@ export function createHighAlertEmbed(token,pair,previous,current,clock=new Date(
   };
 }
 
-export async function updateObservedHighs(client, store, entries, { now } = {}) {
+export async function updateObservedHighs(client, store, entries, { now, persist = true } = {}) {
   let changed = false, alerts = 0;
   const configured = Number(store.config.athMinPct);
   const minimumPct = Math.max(ATH_ALERT_MIN_INCREASE_PCT, Number.isFinite(configured) && configured >= 0 ? configured : 0);
@@ -566,7 +566,7 @@ export async function updateObservedHighs(client, store, entries, { now } = {}) 
       console.error('[tracker:ath] Alert could not be posted for', token.chain, error.message);
     }
   }
-  if (changed) await saveStore(client, store);
+  if (changed && persist) await saveStore(client, store);
   return { alerts, athEnabled: Boolean(channelId) };
 }
 
@@ -630,7 +630,7 @@ export function createEarlyLiquidityAlertEmbed(token, pair, beforeLiquidity, clo
   };
 }
 
-export async function updateRugWatch(client, store, entries, { now } = {}) {
+export async function updateRugWatch(client, store, entries, { now, persist = true } = {}) {
   const channelId = store.config.rugChannelId;
   if (!channelId) return { rugAlerts: 0, earlyLiquidityAlerts: 0, rugEnabled: false };
   const clock = typeof now === 'function' ? now() : new Date();
@@ -741,7 +741,7 @@ export async function updateRugWatch(client, store, entries, { now } = {}) {
       changed = true;
     }
   }
-  if (changed) await saveStore(client, store);
+  if (changed && persist) await saveStore(client, store);
   return { rugAlerts, earlyLiquidityAlerts, rugEnabled: true };
 }
 
@@ -803,7 +803,7 @@ export function createSelloffAlertEmbed(token, pair, signal, clock = new Date())
   };
 }
 
-export async function updateLargeSelloffs(client, store, entries, { now } = {}) {
+export async function updateLargeSelloffs(client, store, entries, { now, persist = true } = {}) {
   const channelId = store.config.selloffChannelId;
   if (!channelId) return { selloffAlerts: 0, selloffEnabled: false };
   const clock = typeof now === 'function' ? now() : new Date();
@@ -829,7 +829,7 @@ export async function updateLargeSelloffs(client, store, entries, { now } = {}) 
       // No cooldown after failure: retry on next refresh.
     }
   }
-  if (changed) await saveStore(client, store);
+  if (changed && persist) await saveStore(client, store);
   return { selloffAlerts: alerts, selloffEnabled: true };
 }
 
