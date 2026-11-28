@@ -48,6 +48,7 @@ export function parseConfig(input) {
            !data.dashboardMessageIds.every(id => /^\d{16,22}$/.test(String(id))))) continue;
       if (data.athChannelId != null && !/^\d{16,22}$/.test(data.athChannelId)) continue;
       if (data.rugChannelId != null && !/^\d{16,22}$/.test(data.rugChannelId)) continue;
+      if (data.selloffChannelId != null && !/^\d{16,22}$/.test(data.selloffChannelId)) continue;
       if (data.athMinPct != null && (!Number.isFinite(data.athMinPct) || data.athMinPct < 0 || data.athMinPct > 100)) continue;
       return data;
     } catch {
@@ -93,6 +94,7 @@ export function createStorageEmbed(config) {
       config.dashboardChannelId + '>',
     '**Observed-high alerts**  ' + (config.athChannelId ? '<#' + config.athChannelId + '>' : 'Off'),
     '**Rug watch**  ' + (config.rugChannelId ? '<#' + config.rugChannelId + '>' : 'Off'),
+    '**Large selloff alerts**  ' + (config.selloffChannelId ? '<#' + config.selloffChannelId + '>' : 'Off'),
     '',
     '**Watchlist**',
     listing,
@@ -655,12 +657,100 @@ export async function updateRugWatch(client, store, entries, { now } = {}) {
   return { rugAlerts, rugEnabled: true };
 }
 
+// DEX Screener reports rolling price changes and buy/sell transaction counts.
+// A selloff means bearish trading pressure, NOT a proven rug or liquidity pull.
+// Reuse the market data already fetched for the once-per-minute dashboard.
+export const SELLOFF_ALERT_COOLDOWN_MS = 60 * 60 * 1000;
+const SELLOFF_MAX_ALERTS_PER_REFRESH = 5;
+export const SELLOFF_RULES = Object.freeze({
+  m5: { minPriceDropPct: 20, minTransactions: 20, minSellBuyRatio: 2 },
+  h1: { minPriceDropPct: 35, minTransactions: 50, minSellBuyRatio: 2 },
+});
+
+export function detectLargeSelloff(pair) {
+  if (!pair) return null;
+  for (const window of ['m5','h1']) {
+    const rule = SELLOFF_RULES[window];
+    const change = pair.priceChange?.[window];
+    const buysRaw = pair.txns?.[window]?.buys;
+    const sellsRaw = pair.txns?.[window]?.sells;
+    // No detection when market/transaction data is missing or malformed.
+    if (change === null || change === undefined ||
+        buysRaw === null || buysRaw === undefined ||
+        sellsRaw === null || sellsRaw === undefined) continue;
+    const priceChange = Number(change), buys = Number(buysRaw), sells = Number(sellsRaw);
+    if (!Number.isFinite(priceChange) || !Number.isSafeInteger(buys) ||
+        !Number.isSafeInteger(sells) || buys < 0 || sells < 0) continue;
+    if (priceChange > -rule.minPriceDropPct || buys + sells < rule.minTransactions ||
+        sells < 2 * buys || sells === 0) continue;
+    return { window, priceChange, buys, sells };
+  }
+  return null;
+}
+
+export function createSelloffAlertEmbed(token, pair, signal, clock = new Date()) {
+  const symbol = safeText(pair?.baseToken?.symbol || token.symbol || token.name, 24) || 'Unknown token';
+  const chain = safeText(token.chain, 16).toUpperCase();
+  const chart = dexChartUrl(pair);
+  const tick = String.fromCharCode(96);
+  const period = signal.window === 'm5' ? '5 minutes' : '1 hour';
+  const ratio = signal.buys > 0 ? (signal.sells / signal.buys).toFixed(2) + '×' : 'No buys';
+  return {
+    title: '🟥 Large Selloff Detected',
+    description: [
+      '**' + symbol + '** · ' + chain,
+      'Price change (' + period + '): **' + signal.priceChange.toFixed(2) + '%**',
+      'Buys: **' + signal.buys.toLocaleString('en-US') +
+        '** · Sells: **' + signal.sells.toLocaleString('en-US') + '**',
+      'Sell-to-buy transaction ratio: **' + ratio + '**',
+      'Price: **' + formatPrice(pair?.priceUsd) + '** · Liq ' +
+        formatCompact(pair?.liquidity?.usd, { usd: true }),
+      (chart ? '[View chart](' + chart + ') · ' : '') +
+        'CA ' + tick + shortAddress(token.address) + tick,
+    ].join('\n'),
+    color: 0xef4444,
+    footer: { text: 'Trading-pressure warning · Sell/buy counts are transactions, not USD volume · Not proof of a rug' },
+    timestamp: clock.toISOString(),
+  };
+}
+
+export async function updateLargeSelloffs(client, store, entries, { now } = {}) {
+  const channelId = store.config.selloffChannelId;
+  if (!channelId) return { selloffAlerts: 0, selloffEnabled: false };
+  const clock = typeof now === 'function' ? now() : new Date();
+  const timestamp = Math.floor(clock.getTime() / 1000);
+  let alerts = 0, changed = false;
+  for (const { token, pair } of entries) {
+    const signal = detectLargeSelloff(pair);
+    if (!signal) continue;
+    const lastAlert = Number(token.s) || 0;
+    if (lastAlert && clock.getTime() - lastAlert * 1000 < SELLOFF_ALERT_COOLDOWN_MS) continue;
+    if (alerts >= SELLOFF_MAX_ALERTS_PER_REFRESH) break;
+    try {
+      await client.request('/channels/' + channelId + '/messages', {
+        method: 'POST',
+        body: { embeds: [createSelloffAlertEmbed(token, pair, signal, clock)],
+          allowed_mentions: { parse: [] } },
+      });
+      token.s = timestamp; // Compact per-token cooldown; persists in private store.
+      changed = true;
+      alerts++;
+    } catch (error) {
+      console.error('[tracker:selloff] Could not post warning for', token.chain, error.message);
+      // No cooldown after failure: retry on next refresh.
+    }
+  }
+  if (changed) await saveStore(client, store);
+  return { selloffAlerts: alerts, selloffEnabled: true };
+}
+
 export async function publishDashboard(client, store, { fetcher, now } = {}) {
   const tokens = store.config.tokens;
   const entries = await fetchAllPairs(tokens, fetcher);
   await hydrateTokenSymbols(client, store, { entries });
   const highs = await updateObservedHighs(client, store, entries, { now });
   const rugs = await updateRugWatch(client, store, entries, { now });
+  const selloffs = await updateLargeSelloffs(client, store, entries, { now });
   const pages = createDashboardPages(entries, now ? now() : new Date());
   const content = dashboardMessageContent(tokens.length);
   const channelId = store.config.dashboardChannelId;
@@ -694,5 +784,5 @@ export async function publishDashboard(client, store, { fetcher, now } = {}) {
     try { await client.request('/channels/' + channelId + '/messages/' + stale, { method: 'DELETE', allow404: true }); }
     catch (error) { console.warn('[tracker:pages] Could not remove old page:', error.message); }
   }
-  return { created, updated: !created, count: tokens.length, messageId: ids[0], pages: ids.length, ...highs, ...rugs };
+  return { created, updated: !created, count: tokens.length, messageId: ids[0], pages: ids.length, ...highs, ...rugs, ...selloffs };
 }
