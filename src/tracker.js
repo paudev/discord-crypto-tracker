@@ -950,14 +950,41 @@ export function buildAlertDiagnostics(token, pair, config, clock = new Date(), l
   return parts.join('\n').slice(0, 1850);
 }
 
-export async function publishDashboard(client, store, { fetcher, now } = {}) {
+// Coalesce overlapping refresh calls within one Node instance. Across
+// separate serverless instances the pre-save reconciliation below reduces
+// (but cannot eliminate) races without a transactional external database.
+const inFlightDashboards = new Map();
+export async function publishDashboard(client, store, options = {}) {
+  const key = store.configChannelId + ':' + store.configMessageId;
+  if (inFlightDashboards.has(key)) {
+    return { ...(await inFlightDashboards.get(key)), coalesced: true };
+  }
+  const task = publishDashboardCore(client, store, options);
+  inFlightDashboards.set(key, task);
+  try { return await task; }
+  finally { if (inFlightDashboards.get(key) === task) inFlightDashboards.delete(key); }
+}
+
+async function publishDashboardCore(client, store, { fetcher, now } = {}) {
   const tokens = store.config.tokens;
+  const clock = typeof now === 'function' ? now() : new Date();
   const entries = await fetchAllPairs(tokens, fetcher);
-  await hydrateTokenSymbols(client, store, { entries });
-  const highs = await updateObservedHighs(client, store, entries, { now });
-  const rugs = await updateRugWatch(client, store, entries, { now });
-  const selloffs = await updateLargeSelloffs(client, store, entries, { now });
-  const pages = createDashboardPages(entries, now ? now() : new Date());
+  // Establish pool identity and check status before evaluating alert rules.
+  captureMarketDiagnostics(entries, clock);
+  // One state write instead of a separate edit for each alert family.
+  await hydrateTokenSymbols(client, store, { entries, persist: false });
+  const highs = await updateObservedHighs(client, store, entries, { now, persist: false });
+  const rugs = await updateRugWatch(client, store, entries, { now, persist: false });
+  const selloffs = await updateLargeSelloffs(client, store, entries, { now, persist: false });
+  await saveRefreshState(client, store);
+  const originalKeys = tokens.map(t => t.chain + ':' + t.address);
+  const storedKeys = store.config.tokens.map(t => t.chain + ':' + t.address);
+  if (originalKeys.join('|') !== storedKeys.join('|')) {
+    // Avoid restoring deleted tokens or publishing a stale watchlist. The next
+    // cron refresh will fetch the latest token selection.
+    return { deferred: true, count: store.config.tokens.length, ...highs, ...rugs, ...selloffs };
+  }
+  const pages = createDashboardPages(entries, clock);
   const content = dashboardMessageContent(tokens.length);
   const channelId = store.config.dashboardChannelId;
   const previousIds = Array.isArray(store.config.dashboardMessageIds) && store.config.dashboardMessageIds.length
