@@ -921,6 +921,21 @@ export function buildAlertDiagnostics(token, pair, config, clock = new Date(), l
   const liquidity = pair?.liquidity?.usd == null ? NaN : Number(pair.liquidity.usd);
   const drop = samePool && age > 0 && age <= 900 && baseline >= RUG_MIN_BASE_LIQUIDITY_USD &&
     Number.isFinite(liquidity) ? (1 - liquidity / baseline) * 100 : null;
+  const historicalPrice = Number(before[2]);
+  const livePrice = Number(pair?.priceUsd);
+  const priceDrop = drop != null && historicalPrice > 0 && Number.isFinite(livePrice)
+    ? (1 - livePrice / historicalPrice) * 100 : null;
+  const meetsCritical = drop !== null && (drop >= 95 ||
+    (drop >= 70 && priceDrop !== null && priceDrop >= 50));
+  const meetsEarly = drop !== null && !meetsCritical && drop >= EARLY_LIQUIDITY_DROP_PCT;
+  const athNotificationBaseline = Math.max(Number(token.a) || Number(token.h) || 0,
+    Number(token.b) || 0);
+  const minAthPercent = Math.max(ATH_ALERT_MIN_INCREASE_PCT,
+    Number(config.athMinPct) || 0);
+  const athGain = athNotificationBaseline > 0 && mc !== null
+    ? (mc / athNotificationBaseline - 1) * 100 : null;
+  const athEligible = mc !== null && mc > (Number(token.h) || 0) &&
+    athGain !== null && athGain >= minAthPercent;
   const criticalCooldown = before[4] && clock.getTime() - Number(before[4]) * 1000 < RUG_ALERT_COOLDOWN_MS;
   const earlyCooldown = before[6] && clock.getTime() - Number(before[6]) * 1000 < EARLY_LIQUIDITY_COOLDOWN_MS;
   const parts = [
@@ -937,13 +952,16 @@ export function buildAlertDiagnostics(token, pair, config, clock = new Date(), l
     '**Rug/Liquidity:** ' + (!config.rugChannelId ? 'Disabled' :
       drop === null ? 'No recent same-pool baseline; waiting for samples' :
       drop.toFixed(1) + '% USD liquidity drop from baseline' +
+        (meetsCritical ? ' · CRITICAL threshold met' :
+          meetsEarly ? ' · early-warning threshold met' : ' · below warning thresholds') +
         (criticalCooldown ? ' · critical cooldown' : '') +
         (earlyCooldown ? ' · early-warning cooldown' : '') +
-        (before[5] ? ' · early-warning confirmation pending' : '')),
+        (before[5] ? ' · confirmation pending' : '')),
     '**ATH:** ' + (!config.athChannelId ? 'Notifications off' :
       mc == null ? 'No live market cap' :
-      'MC ' + formatCompact(mc, {usd:true}) + ' · recorded baseline ' +
-        formatCompact(athBase, {usd:true}) + (mc > athBase ? ' · new observed high' : ' · below high') +
+      'MC ' + formatCompact(mc, {usd:true}) + ' · recorded high ' +
+        formatCompact(athBase, {usd:true}) +
+        (athEligible ? ' · gain threshold met' : ' · no qualifying new high') +
         (athCooldown ? ' · cooldown active' : '') +
         (token.q ? ' · spike confirmation pending' : '')),
     '_Live market conditions may differ from the previous refresh; this is not a historical audit._',
