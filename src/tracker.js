@@ -833,6 +833,123 @@ export async function updateLargeSelloffs(client, store, entries, { now, persist
   return { selloffAlerts: alerts, selloffEnabled: true };
 }
 
+// Keep a compact per-token record of the most recent attempted market check:
+// [checkedAtSeconds, 0=OK/1=no pool/2=API failure, poolSwitchedFlag].
+// This enables diagnostics even when a later manual DEX lookup fails.
+export function captureMarketDiagnostics(entries, clock = new Date()) {
+  const ts = Math.floor(clock.getTime() / 1000);
+  for (const { token, pair, error } of entries) {
+    const current = poolKey(pair);
+    const previous = token.p || token.r?.[0] || '';
+    const switched = Boolean(current && previous && current !== previous);
+    if (current) token.p = current;
+    if (switched) delete token.q; // never confirm an ATH across distinct pools
+    token.d = [ts, pair ? 0 : error ? 2 : 1, switched ? 1 : 0];
+  }
+}
+
+// Read current stored state once before committing refreshed observations.
+// Preserve channel configuration and token removals made during this refresh,
+// and merge monotonic ATH/cooldown history. This lowers stale-write risk; since
+// Discord does not offer conditional edits, it isn't a distributed CAS lock.
+export async function saveRefreshState(client, store) {
+  const url = '/channels/' + store.configChannelId + '/messages/' + store.configMessageId;
+  try {
+    const remoteMessage = await client.request(url, { allow404: true });
+    const latest = parseConfig(remoteMessage);
+    if (latest) {
+      const localByKey = new Map(store.config.tokens.map(t => [t.chain + ':' + t.address, t]));
+      const mergeMax = (a,b) => Math.max(Number(a) || 0, Number(b) || 0);
+      const tokens = latest.tokens.map(remote => {
+        const local = localByKey.get(remote.chain + ':' + remote.address);
+        if (!local) return remote; // do not resurrect tokens removed by a command
+        const merged = { ...remote };
+        for (const property of ['h','a','t','s']) {
+          const value = mergeMax(local[property], remote[property]);
+          if (value) merged[property] = value;
+        }
+        if (!merged.b && local.b) merged.b = local.b;
+        const older = Array.isArray(remote.r) ? remote.r : null;
+        const newer = Array.isArray(local.r) ? local.r : null;
+        if (newer || older) {
+          const preferred = Number(newer?.[3]) >= Number(older?.[3]) ? newer : older;
+          if (preferred) {
+            merged.r = [...preferred];
+            merged.r[4] = mergeMax(newer?.[4], older?.[4]);
+            if (newer?.[5] || older?.[5]) merged.r[5] = Number(preferred?.[5]) || 0;
+            merged.r[6] = mergeMax(newer?.[6], older?.[6]);
+          }
+        }
+        const remoteAt = Number(remote.d?.[0]) || 0;
+        const localAt = Number(local.d?.[0]) || 0;
+        if (localAt >= remoteAt && Array.isArray(local.d)) {
+          merged.d = local.d;
+          if (local.p) merged.p = local.p;
+          if (local.q) merged.q = local.q;
+          else delete merged.q;
+          if (local.symbol) merged.symbol = local.symbol;
+        }
+        return merged;
+      });
+      store.config = { ...latest, tokens };
+    }
+  } catch (error) {
+    // Some test clients and transient Discord requests cannot read by message
+    // ID. The regular save remains available, but a concurrent writer may race.
+    console.warn('[tracker:reconcile] Could not reload latest storage', error.message);
+  }
+  await saveStore(client, store);
+}
+
+export function buildAlertDiagnostics(token, pair, config, clock = new Date(), lookupError = null) {
+  const symbol = safeText(token.symbol || pair?.baseToken?.symbol || token.address, 24) || 'Unknown token';
+  const d = Array.isArray(token.d) ? token.d : [];
+  const lastAt = Number(d[0]) || 0;
+  const status = d[1] === 0 ? 'Market data OK' : d[1] === 1 ? 'No priced pool' :
+    d[1] === 2 ? 'DEX API error' : 'No saved sample yet';
+  const pool = poolKey(pair) || token.p || token.r?.[0] || 'Unknown';
+  const sell = detectLargeSelloff(pair);
+  const sellCooldown = token.s && clock.getTime() - Number(token.s) * 1000 < SELLOFF_ALERT_COOLDOWN_MS;
+  const mc = observedMarketCap(pair);
+  const athBase = Math.max(Number(token.h) || 0, Number(token.b) || 0);
+  const athCooldown = token.t && clock.getTime() - Number(token.t) * 1000 < ATH_ALERT_COOLDOWN_MS;
+  const before = Array.isArray(token.r) ? token.r : [];
+  const age = clock.getTime() / 1000 - (Number(before[3]) || 0);
+  const samePool = Boolean(pair && before[0] && before[0] === pool);
+  const baseline = Number(before[1]);
+  const liquidity = pair?.liquidity?.usd == null ? NaN : Number(pair.liquidity.usd);
+  const drop = samePool && age > 0 && age <= 900 && baseline >= RUG_MIN_BASE_LIQUIDITY_USD &&
+    Number.isFinite(liquidity) ? (1 - liquidity / baseline) * 100 : null;
+  const criticalCooldown = before[4] && clock.getTime() - Number(before[4]) * 1000 < RUG_ALERT_COOLDOWN_MS;
+  const earlyCooldown = before[6] && clock.getTime() - Number(before[6]) * 1000 < EARLY_LIQUIDITY_COOLDOWN_MS;
+  const parts = [
+    '**Alert Diagnostics · ' + symbol + '**',
+    'Last scheduled check: ' + (lastAt ? '<t:' + lastAt + ':R> · ' + status : 'Not yet sampled'),
+    'Selected pool: ' + String.fromCharCode(96) + safeText(pool, 24) + String.fromCharCode(96) +
+      (d[2] ? ' · changed on latest check' : ''),
+    'Live lookup: ' + (lookupError ? 'API error: ' + safeText(lookupError, 75) :
+      pair ? 'Market data available' : 'No priced pool'),
+    '**Selloff:** ' + (!config.selloffChannelId ? 'Disabled' : !pair ? 'Unavailable · market data missing' :
+      sell ? (sell.window + ' conditions met' + (sellCooldown ? ' · cooldown active' : ' · eligible now')) :
+      'No 5m, 1h or 6h condition met') +
+      (token.s ? ' · last alert <t:' + Number(token.s) + ':R>' : ''),
+    '**Rug/Liquidity:** ' + (!config.rugChannelId ? 'Disabled' :
+      drop === null ? 'No recent same-pool baseline; waiting for samples' :
+      drop.toFixed(1) + '% USD liquidity drop from baseline' +
+        (criticalCooldown ? ' · critical cooldown' : '') +
+        (earlyCooldown ? ' · early-warning cooldown' : '') +
+        (before[5] ? ' · early-warning confirmation pending' : '')),
+    '**ATH:** ' + (!config.athChannelId ? 'Notifications off' :
+      mc == null ? 'No live market cap' :
+      'MC ' + formatCompact(mc, {usd:true}) + ' · recorded baseline ' +
+        formatCompact(athBase, {usd:true}) + (mc > athBase ? ' · new observed high' : ' · below high') +
+        (athCooldown ? ' · cooldown active' : '') +
+        (token.q ? ' · spike confirmation pending' : '')),
+    '_Live market conditions may differ from the previous refresh; this is not a historical audit._',
+  ];
+  return parts.join('\n').slice(0, 1850);
+}
+
 export async function publishDashboard(client, store, { fetcher, now } = {}) {
   const tokens = store.config.tokens;
   const entries = await fetchAllPairs(tokens, fetcher);
