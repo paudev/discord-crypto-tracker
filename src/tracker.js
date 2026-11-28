@@ -71,11 +71,13 @@ export function serializeConfig(config) {
 const STORE_TOPIC = 'Private machine-readable watchlist for the Discord Crypto Tracker bot. Do not remove this channel.';
 const STORAGE_MARKER = '[SpicyTracker storage]';
 
-export function createStorageEmbed(config) {
+export function createStorageEmbed(config, maxPreview = null) {
   const tokens = Array.isArray(config.tokens) ? config.tokens : [];
   // For large watchlists keep the private preview short to reserve space for
-  // full, lossless compressed configuration and recorded ATH/rug history.
-  const visible = tokens.slice(0, tokens.length > 12 ? 5 : 12);
+  // full, lossless compressed configuration and recorded ATH/rug/selloff history.
+  // Reduce only the visible private preview if storage approaches Discord's cap.
+  const previewCount = maxPreview == null ? (tokens.length > 12 ? 5 : 12) : maxPreview;
+  const visible = tokens.slice(0, previewCount);
   const listing = tokens.length
     ? visible.map((token, i) => {
         const address = String(token.address ?? '');
@@ -114,6 +116,7 @@ export function createStorageEmbed(config) {
   const description = heading + '||' + first + '||';
   const totalChars = title.length + description.length + footer.text.length +
     fields.reduce((sum, field) => sum + field.name.length + field.value.length, 0);
+  if (totalChars > 6000 && visible.length) return createStorageEmbed(config, 0);
   if (totalChars > 6000) throw new Error('Watchlist configuration exceeds Discord storage limits.');
   return { title, color: 0x5865f2, description, ...(fields.length ? { fields } : {}), footer };
 }
