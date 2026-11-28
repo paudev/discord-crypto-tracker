@@ -221,3 +221,37 @@ test('serialized diagnostics, pinned pool and warning history fit private embed 
  assert.ok(embed.description.length<=4096);
  assert.deepEqual(parseConfig({embeds:[embed]}),cfg);
 });
+
+
+test('fresh first-time rug baseline is not dropped by reconciling with empty remote history',async()=>{
+ const f=fixture({rug:true,ath:false,sell:false});
+ const latest={...f.store.config,tokens:[{...f.item}]};
+ const baseline=['main-pool',12000,0.001,1795824000,0,0,0];
+ f.item.r=baseline;
+ f.item.d=[1795824000,0,0];
+ f.item.p='main-pool';
+ f.client.request=async(path,opts={})=>{
+  if(path==='/channels/'+STORE+'/messages/'+MSG && !opts.method)
+   return {embeds:[createStorageEmbed(latest)]};
+  if(path==='/channels/'+STORE+'/messages/'+MSG && opts.method==='PATCH')
+   return {id:MSG};
+  throw Error('Unexpected '+path);
+ };
+ await saveRefreshState(f.client,f.store);
+ assert.deepEqual(f.store.config.tokens[0].r,baseline);
+ assert.deepEqual(f.store.config.tokens[0].d,[1795824000,0,0]);
+});
+test('reconciler does not restore a tracked token that a command removed',async()=>{
+ const f=fixture({rug:true,ath:false,sell:false});
+ const deleted={...f.store.config,tokens:[]};
+ f.item.d=[1795824000,0,0];
+ f.client.request=async(path,opts={})=>{
+  if(path==='/channels/'+STORE+'/messages/'+MSG && !opts.method)
+   return {embeds:[createStorageEmbed(deleted)]};
+  if(path==='/channels/'+STORE+'/messages/'+MSG && opts.method==='PATCH')
+   return {id:MSG};
+  throw Error('Unexpected '+path);
+ };
+ await saveRefreshState(f.client,f.store);
+ assert.equal(f.store.config.tokens.length,0);
+});
