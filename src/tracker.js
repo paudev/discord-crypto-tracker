@@ -1,6 +1,6 @@
 import { CONFIG_MARKER, MAX_TOKENS, safeText } from './discord.js';
 import { fetchAllPairs, poolKey } from './dexscreener.js';
-import { deflateRawSync, inflateRawSync } from 'node:zlib';
+import { deflateRawSync, inflateRawSync, brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from 'node:zlib';
 
 const CONFIG_CHANNEL_NAME = 'crypto-tracker-data';
 const VIEW_CHANNEL = 1024n;
@@ -28,7 +28,7 @@ export function parseConfig(input) {
     if (!raw) continue;
     try {
       // Large 25-token watchlists append compressed-data chunks in embed fields.
-      if (raw.startsWith(CONFIG_MARKER + 'z:') && Array.isArray(source.fields)) {
+      if ((raw.startsWith(CONFIG_MARKER + 'z:') || raw.startsWith(CONFIG_MARKER + 'b:')) && Array.isArray(source.fields)) {
         const rest = source.fields.filter(f => String(f.name).startsWith('Config continuation '));
         for (const field of rest) {
           const value = String(field.value ?? '');
@@ -37,9 +37,23 @@ export function parseConfig(input) {
         }
       }
       const encoded = raw.slice(CONFIG_MARKER.length);
-      const data = JSON.parse(encoded.startsWith('z:')
-        ? inflateRawSync(Buffer.from(encoded.slice(2), 'base64'), { maxOutputLength: 100_000 }).toString('utf8')
-        : encoded);
+      const data = JSON.parse(encoded.startsWith('b:')
+        ? brotliDecompressSync(Buffer.from(encoded.slice(2), 'base64'),
+          { maxOutputLength: 100_000 }).toString('utf8')
+        : encoded.startsWith('z:')
+          ? inflateRawSync(Buffer.from(encoded.slice(2), 'base64'),
+            { maxOutputLength: 100_000 }).toString('utf8')
+          : encoded);
+      if (encoded.startsWith('b:')) {
+        // Rebuild fields that were deliberately deduplicated in compact
+        // storage. Old raw/z: records remain byte-for-byte compatible.
+        for (const token of data.tokens || []) {
+          const mask = Number(token._c) || 0;
+          if (mask & 1) token.p = token.r?.[0];
+          if ((mask & 2) && Array.isArray(token.q)) token.q[1] = token.r?.[0];
+          delete token._c;
+        }
+      }
       if (data.version !== 1 || !Array.isArray(data.tokens) || data.tokens.length > MAX_TOKENS) continue;
       if (!/^\d{16,22}$/.test(data.dashboardChannelId)) continue;
       if (data.dashboardMessageId && !/^\d{16,22}$/.test(data.dashboardMessageId)) continue;
@@ -59,11 +73,29 @@ export function parseConfig(input) {
 }
 
 export function serializeConfig(config) {
-  const raw = CONFIG_MARKER + JSON.stringify(config);
-  // Backwards-compatible legacy JSON; compress large 13-25 token watchlists.
-  const body = config.tokens?.length > 12 || raw.length > 3000
-    ? CONFIG_MARKER + 'z:' + deflateRawSync(Buffer.from(JSON.stringify(config))).toString('base64')
+  const json = JSON.stringify(config);
+  const raw = CONFIG_MARKER + json;
+  // Keep raw and existing z: records compatible. Only dense watchlists need
+  // stronger compression, avoiding a second message or paid external storage.
+  let body = config.tokens?.length > 12 || raw.length > 3000
+    ? CONFIG_MARKER + 'z:' + deflateRawSync(Buffer.from(json)).toString('base64')
     : raw;
+  if (body.length > 5000) {
+    const compact = { ...config, tokens: config.tokens.map(token => {
+      const item = { ...token };
+      let mask = 0;
+      if (item.r?.[0] && item.p === item.r[0]) { delete item.p; mask |= 1; }
+      if (item.r?.[0] && item.q?.[1] === item.r[0]) {
+        item.q = [item.q[0]]; mask |= 2;
+      }
+      if (mask) item._c = mask;
+      return item;
+    }) };
+    const compressed = brotliCompressSync(Buffer.from(JSON.stringify(compact)), {
+      params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 11 },
+    });
+    body = CONFIG_MARKER + 'b:' + compressed.toString('base64');
+  }
   if (body.length > 5500) throw new Error('Watchlist exceeds available private storage space.');
   return body;
 }
