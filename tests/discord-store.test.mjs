@@ -459,6 +459,7 @@ test('authenticated refresh registers the ATH preview slash command once and rem
       assert.ok(command.options.some(x=>x.name==='ath-preview'));
       assert.ok(command.options.some(x=>x.name==='selloff-channel'));
       assert.ok(command.options.some(x=>x.name==='selloff-preview'));
+      assert.ok(command.options.some(x=>x.name==='alert-diagnostics'));
       assert.ok(command.options.length<=25);
       return [{name:'tracker'}];
     }
@@ -467,7 +468,7 @@ test('authenticated refresh registers the ATH preview slash command once and rem
   const store=await loadStore(client,GUILD);
   assert.equal(await syncTrackerCommandsIfNeeded(client,store,APP,GUILD),true);
   assert.equal(puts,1);
-  assert.equal((await loadStore(client,GUILD)).config.cv,7);
+  assert.equal((await loadStore(client,GUILD)).config.cv,8);
   assert.equal(await syncTrackerCommandsIfNeeded(client,store,APP,GUILD),false);
   assert.equal(puts,1);
 });
@@ -615,4 +616,31 @@ test('selloff preview uses the exact real warning embed and does not change cool
     client,applicationId:APP,fetcher:pairResponse,
   });
   assert.match(privateResult,/private storage/);
+});
+
+
+test('per-token alert diagnostics reports pool and check status without changing saved state',async()=>{
+ const client=createFakeDiscord();
+ await selectStorageChannel(client,{guildId:GUILD,targetId:PRIVATE,fallbackDashboardChannelId:GENERAL});
+ const store=await loadStore(client,GUILD);
+ store.config.tokens=[{chain:'solana',address:SOL,symbol:'GOO',
+   p:'pool-key-123',d:[1795824000,0,0],h:35000,a:35000}];
+ await saveStore(client,store);
+ const before=JSON.stringify((await loadStore(client,GUILD)).config);
+ const response=await executeTrackerCommand({
+   interaction:interaction('alert-diagnostics',[opt('token',SOL)]),
+   client,applicationId:APP,fetcher:pairResponse,
+ });
+ assert.match(response,/Alert Diagnostics/);
+ assert.match(response,/Last scheduled check/);
+ assert.match(response,/Selected pool/);
+ assert.match(response,/Selloff/);
+ assert.match(response,/Rug\/Liquidity/);
+ assert.match(response,/ATH/);
+ assert.equal(JSON.stringify((await loadStore(client,GUILD)).config),before);
+ const unknown=await executeTrackerCommand({
+   interaction:interaction('alert-diagnostics',[opt('token','UNKNOWN')]),
+   client,applicationId:APP,fetcher:pairResponse,
+ });
+ assert.match(unknown,/No matching tracked token/);
 });

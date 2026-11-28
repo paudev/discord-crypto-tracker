@@ -1,6 +1,6 @@
 import { CONFIG_MARKER, MAX_TOKENS, safeText } from './discord.js';
-import { fetchAllPairs } from './dexscreener.js';
-import { deflateRawSync, inflateRawSync } from 'node:zlib';
+import { fetchAllPairs, poolKey } from './dexscreener.js';
+import { deflateRawSync, inflateRawSync, brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from 'node:zlib';
 
 const CONFIG_CHANNEL_NAME = 'crypto-tracker-data';
 const VIEW_CHANNEL = 1024n;
@@ -28,7 +28,7 @@ export function parseConfig(input) {
     if (!raw) continue;
     try {
       // Large 25-token watchlists append compressed-data chunks in embed fields.
-      if (raw.startsWith(CONFIG_MARKER + 'z:') && Array.isArray(source.fields)) {
+      if ((raw.startsWith(CONFIG_MARKER + 'z:') || raw.startsWith(CONFIG_MARKER + 'b:')) && Array.isArray(source.fields)) {
         const rest = source.fields.filter(f => String(f.name).startsWith('Config continuation '));
         for (const field of rest) {
           const value = String(field.value ?? '');
@@ -37,9 +37,23 @@ export function parseConfig(input) {
         }
       }
       const encoded = raw.slice(CONFIG_MARKER.length);
-      const data = JSON.parse(encoded.startsWith('z:')
-        ? inflateRawSync(Buffer.from(encoded.slice(2), 'base64'), { maxOutputLength: 100_000 }).toString('utf8')
-        : encoded);
+      const data = JSON.parse(encoded.startsWith('b:')
+        ? brotliDecompressSync(Buffer.from(encoded.slice(2), 'base64'),
+          { maxOutputLength: 100_000 }).toString('utf8')
+        : encoded.startsWith('z:')
+          ? inflateRawSync(Buffer.from(encoded.slice(2), 'base64'),
+            { maxOutputLength: 100_000 }).toString('utf8')
+          : encoded);
+      if (encoded.startsWith('b:')) {
+        // Rebuild fields that were deliberately deduplicated in compact
+        // storage. Old raw/z: records remain byte-for-byte compatible.
+        for (const token of data.tokens || []) {
+          const mask = Number(token._c) || 0;
+          if (mask & 1) token.p = token.r?.[0];
+          if ((mask & 2) && Array.isArray(token.q)) token.q[1] = token.r?.[0];
+          delete token._c;
+        }
+      }
       if (data.version !== 1 || !Array.isArray(data.tokens) || data.tokens.length > MAX_TOKENS) continue;
       if (!/^\d{16,22}$/.test(data.dashboardChannelId)) continue;
       if (data.dashboardMessageId && !/^\d{16,22}$/.test(data.dashboardMessageId)) continue;
@@ -59,11 +73,29 @@ export function parseConfig(input) {
 }
 
 export function serializeConfig(config) {
-  const raw = CONFIG_MARKER + JSON.stringify(config);
-  // Backwards-compatible legacy JSON; compress large 13-25 token watchlists.
-  const body = config.tokens?.length > 12 || raw.length > 3000
-    ? CONFIG_MARKER + 'z:' + deflateRawSync(Buffer.from(JSON.stringify(config))).toString('base64')
+  const json = JSON.stringify(config);
+  const raw = CONFIG_MARKER + json;
+  // Keep raw and existing z: records compatible. Only dense watchlists need
+  // stronger compression, avoiding a second message or paid external storage.
+  let body = config.tokens?.length > 12 || raw.length > 3000
+    ? CONFIG_MARKER + 'z:' + deflateRawSync(Buffer.from(json)).toString('base64')
     : raw;
+  if (body.length > 5000) {
+    const compact = { ...config, tokens: config.tokens.map(token => {
+      const item = { ...token };
+      let mask = 0;
+      if (item.r?.[0] && item.p === item.r[0]) { delete item.p; mask |= 1; }
+      if (item.r?.[0] && item.q?.[1] === item.r[0]) {
+        item.q = [item.q[0]]; mask |= 2;
+      }
+      if (mask) item._c = mask;
+      return item;
+    }) };
+    const compressed = brotliCompressSync(Buffer.from(JSON.stringify(compact)), {
+      params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 11 },
+    });
+    body = CONFIG_MARKER + 'b:' + compressed.toString('base64');
+  }
   if (body.length > 5500) throw new Error('Watchlist exceeds available private storage space.');
   return body;
 }
@@ -455,7 +487,7 @@ export function createDashboardPages(entries, clock = new Date()) {
 
 function dashboardMessageContent(){return "";}
 
-export async function hydrateTokenSymbols(client,store,{fetcher,entries}={}){
+export async function hydrateTokenSymbols(client,store,{fetcher,entries,persist=true}={}){
  const missing=store.config.tokens.filter(x=>!safeText(x.symbol,24));
  const pairs=entries||(missing.length?await fetchAllPairs(missing,fetcher):[]);
  let changed=false;
@@ -463,7 +495,7 @@ export async function hydrateTokenSymbols(client,store,{fetcher,entries}={}){
   const symbol=safeText(pair?.baseToken?.symbol,24);
   if(symbol&&symbol!==token.symbol){token.symbol=symbol;changed=true;}
  }
- if(changed)await saveStore(client,store);
+ if(changed&&persist)await saveStore(client,store);
  return changed;
 }
 
@@ -501,7 +533,7 @@ export function createHighAlertEmbed(token,pair,previous,current,clock=new Date(
   };
 }
 
-export async function updateObservedHighs(client, store, entries, { now } = {}) {
+export async function updateObservedHighs(client, store, entries, { now, persist = true } = {}) {
   let changed = false, alerts = 0;
   const configured = Number(store.config.athMinPct);
   const minimumPct = Math.max(ATH_ALERT_MIN_INCREASE_PCT, Number.isFinite(configured) && configured >= 0 ? configured : 0);
@@ -509,7 +541,10 @@ export async function updateObservedHighs(client, store, entries, { now } = {}) 
   const clock = typeof now === 'function' ? now() : new Date();
   for (const { token, pair } of entries) {
     const marketCap = observedMarketCap(pair);
-    if (marketCap === null) continue;
+    if (marketCap === null) {
+      if (token.q) { delete token.q; changed = true; }
+      continue; // A missing MC also breaks ATH spike confirmation.
+    }
     const previous = Number(token.h);
     if (!Number.isFinite(previous) || previous <= 0) {
       token.h = marketCap;
@@ -520,6 +555,26 @@ export async function updateObservedHighs(client, store, entries, { now } = {}) 
     const lastNotified = Number(token.a);
     if (!Number.isFinite(lastNotified) || lastNotified <= 0) {
       token.a = previous;
+      changed = true;
+    }
+    // Exceptionally large one-minute jumps can reflect bad data from a DEX
+    // pool. Require another consecutive reading before recording/announcing
+    // an increase of >150% and at least $10k.
+    const isSpike = marketCap > previous * 2.5 && marketCap - previous > 10_000;
+    if (isSpike) {
+      const ts = Math.floor(clock.getTime() / 1000);
+      const key = poolKey(pair);
+      const pending = Array.isArray(token.q) ? token.q : null;
+      const elapsed = ts - (Number(pending?.[0]) || 0);
+      if (!pending || pending[1] !== key || elapsed < 30 || elapsed > 300) {
+        token.q = [ts, key];
+        changed = true;
+        continue;
+      }
+      delete token.q;
+      changed = true;
+    } else if (token.q) {
+      delete token.q;
       changed = true;
     }
     if (marketCap <= previous) continue;
@@ -546,7 +601,7 @@ export async function updateObservedHighs(client, store, entries, { now } = {}) 
       console.error('[tracker:ath] Alert could not be posted for', token.chain, error.message);
     }
   }
-  if (changed) await saveStore(client, store);
+  if (changed && persist) await saveStore(client, store);
   return { alerts, athEnabled: Boolean(channelId) };
 }
 
@@ -582,57 +637,96 @@ export function createRugAlertEmbed(token, pair, beforeLiquidity, beforePrice, c
   };
 }
 
-export async function updateRugWatch(client, store, entries, { now } = {}) {
+export const EARLY_LIQUIDITY_DROP_PCT = 60;
+export const EARLY_LIQUIDITY_COOLDOWN_MS = 2 * 60 * 60 * 1000;
+const EARLY_LIQUIDITY_CONFIRM_MAX_SECONDS = 150;
+
+export function createEarlyLiquidityAlertEmbed(token, pair, beforeLiquidity, clock = new Date()) {
+  const nowLiquidity = Number(pair.liquidity?.usd);
+  const dropPct = (1 - nowLiquidity / beforeLiquidity) * 100;
+  const symbol = safeText(pair.baseToken?.symbol || token.symbol, 24) || 'Unknown token';
+  const chart = dexChartUrl(pair);
+  const tick = String.fromCharCode(96);
+  return {
+    title: '⚠️ Early Liquidity Warning',
+    description: [
+      '**' + symbol + '** · ' + safeText(token.chain, 16).toUpperCase(),
+      'Liquidity (USD): **' + formatCompact(beforeLiquidity, { usd: true }) +
+        '** → **' + formatCompact(nowLiquidity, { usd: true }) +
+        '** (🟥 -' + dropPct.toFixed(1) + '%)',
+      'Price: **' + formatPrice(pair.priceUsd) + '**',
+      'Confirmed in two consecutive valid market readings from the same pool.',
+      (chart ? '[View chart](' + chart + ') · ' : '') +
+        'CA ' + tick + shortAddress(token.address) + tick,
+    ].join('\n'),
+    color: 0xf59e0b,
+    footer: { text: 'Early warning · USD liquidity also changes with market prices · Not proof of LP withdrawal or rug' },
+    timestamp: clock.toISOString(),
+  };
+}
+
+export async function updateRugWatch(client, store, entries, { now, persist = true } = {}) {
   const channelId = store.config.rugChannelId;
-  if (!channelId) return { rugAlerts: 0, rugEnabled: false };
+  if (!channelId) return { rugAlerts: 0, earlyLiquidityAlerts: 0, rugEnabled: false };
   const clock = typeof now === 'function' ? now() : new Date();
   const ts = Math.floor(clock.getTime() / 1000);
-  let rugAlerts = 0, changed = false;
+  let rugAlerts = 0, earlyLiquidityAlerts = 0, changed = false;
   for (const { token, pair } of entries) {
-    if (!pair) continue; // API error or missing pool is NOT evidence of a rug.
-    const liquidity = pair.liquidity?.usd == null ? NaN : Number(pair.liquidity.usd);
-    const price = pair.priceUsd == null ? NaN : Number(pair.priceUsd);
-    const address = String(pair.pairAddress || '');
-    // A compact pool fingerprint keeps 25-token private storage manageable.
-    const poolKey = address.length > 20 ? address.slice(0, 8) + address.slice(-8) : address;
-    if (!address || !Number.isFinite(liquidity) || liquidity < 0 ||
-        !Number.isFinite(price) || price <= 0) continue;
-    // Compact persistent sample: [pair, liquidityUsd, priceUsd, sampledAt, alertedAt].
     const prior = Array.isArray(token.r) ? token.r : null;
-    const lastAlert = Number(prior?.[4]) || 0;
-    const oldLiquidity = Number(prior?.[1]);
-    const oldPrice = Number(prior?.[2]);
-    const samePool = prior?.[0] === poolKey;
-    const ageMs = (ts - (Number(prior?.[3]) || 0)) * 1000;
-    const recent = samePool && ageMs > 0 && ageMs <= RUG_MAX_SAMPLE_GAP_MS;
-    const healthy = oldLiquidity >= RUG_MIN_BASE_LIQUIDITY_USD &&
-      Number.isFinite(oldPrice) && oldPrice > 0;
-    const liquidityDrop = recent && healthy ? 1 - liquidity / oldLiquidity : 0;
-    const priceDrop = recent && healthy ? 1 - price / oldPrice : 0;
-    // Either >95% of liquidity removed, or >70% liquidity plus >50% price fall.
-    const suspicious = liquidityDrop >= 0.95 ||
-      (liquidityDrop >= 0.70 && priceDrop >= 0.50);
-    const cooldown = lastAlert > 0 && clock.getTime() - lastAlert * 1000 < RUG_ALERT_COOLDOWN_MS;
-    const current = [poolKey, Math.round(liquidity * 100) / 100,
-      Number(price.toPrecision(9)), ts, lastAlert];
-    // Hold a reference point for up to 15 minutes, so gradual drains can
-    // accumulate. Avoid writing private storage on unchanged minute ticks.
-    if (!recent) {
-      token.r = current;
-      changed = true;
-      continue;
-    }
-    if (!healthy) {
-      if (liquidity >= RUG_MIN_BASE_LIQUIDITY_USD &&
-          liquidity > oldLiquidity * 1.25) {
-        token.r = current;
+    if (!pair) {
+      // A missing/API-failed reading must break an early-warning confirmation.
+      if (Number(prior?.[5]) > 0) {
+        token.r = [...prior.slice(0, 5), 0, Number(prior?.[6]) || 0];
         changed = true;
       }
       continue;
     }
-    let alertedAt = lastAlert;
-    if (suspicious && !cooldown) {
-      // Prevent mass alert spikes from exceeding serverless/Discord rate limits.
+    const liquidity = pair.liquidity?.usd == null ? NaN : Number(pair.liquidity.usd);
+    const price = pair.priceUsd == null ? NaN : Number(pair.priceUsd);
+    const key = poolKey(pair);
+    if (!key || !Number.isFinite(liquidity) || liquidity < 0 ||
+        !Number.isFinite(price) || price <= 0) {
+      if (Number(prior?.[5]) > 0) {
+        token.r = [...prior.slice(0, 5), 0, Number(prior?.[6]) || 0];
+        changed = true;
+      }
+      continue; // Invalid sample must interrupt a two-reading confirmation.
+    }
+    // Compact persisted sample:
+    // [pool, baselineLiquidity, baselinePrice, sampledAt, rugAlertAt,
+    //  pendingEarlyWarningAt, lastEarlyWarningAt].
+    const lastRugAt = Number(prior?.[4]) || 0;
+    const earlyAt = Number(prior?.[6]) || 0;
+    const oldLiquidity = Number(prior?.[1]);
+    const oldPrice = Number(prior?.[2]);
+    const age = ts - (Number(prior?.[3]) || 0);
+    const recent = prior?.[0] === key && age > 0 && age <= RUG_MAX_SAMPLE_GAP_MS / 1000;
+    const healthy = oldLiquidity >= RUG_MIN_BASE_LIQUIDITY_USD &&
+      Number.isFinite(oldPrice) && oldPrice > 0;
+    const candidate = [key, Math.round(liquidity * 100) / 100,
+      Number(price.toPrecision(9)), ts, lastRugAt, 0, earlyAt];
+    if (!recent) {
+      token.r = candidate;
+      changed = true;
+      continue;
+    }
+    if (!healthy) {
+      if (liquidity >= RUG_MIN_BASE_LIQUIDITY_USD && liquidity > oldLiquidity * 1.25) {
+        token.r = candidate;
+        changed = true;
+      } else if (Number(prior?.[5]) > 0) {
+        token.r = [...prior.slice(0, 5), 0, earlyAt];
+        changed = true;
+      }
+      continue;
+    }
+    const liquidityDrop = 1 - liquidity / oldLiquidity;
+    const priceDrop = 1 - price / oldPrice;
+    const critical = liquidityDrop >= 0.95 ||
+      (liquidityDrop >= 0.70 && priceDrop >= 0.50);
+    const rugCooldown = lastRugAt > 0 && clock.getTime() - lastRugAt * 1000 < RUG_ALERT_COOLDOWN_MS;
+    let confirmedRugAt = lastRugAt;
+    if (critical && !rugCooldown) {
       if (rugAlerts >= RUG_MAX_ALERTS_PER_REFRESH) continue;
       try {
         await client.request('/channels/' + channelId + '/messages', {
@@ -641,23 +735,55 @@ export async function updateRugWatch(client, store, entries, { now } = {}) {
             allowed_mentions: { parse: [] },
           },
         });
-        alertedAt = ts;
+        confirmedRugAt = ts;
         rugAlerts++;
       } catch (error) {
-        // Preserve the previous baseline, so the next healthy refresh can retry.
         console.error('[tracker:rug] Could not alert for', token.chain, error.message);
-        continue;
+        continue; // keep old baseline so the next refresh can retry
       }
     }
-    // After a warning/cooldown reset the reference; otherwise retain the
-    // older sample until it expires or the pool becomes substantially deeper.
-    if (suspicious || liquidity > oldLiquidity * 1.25) {
-      token.r = [current[0], current[1], current[2], current[3], alertedAt];
+    // Critical conditions always take precedence over an early warning.
+    let pendingAt = critical ? 0 : Number(prior?.[5]) || 0;
+    let notifiedEarlyAt = earlyAt;
+    const earlyCondition = !critical && liquidityDrop >= EARLY_LIQUIDITY_DROP_PCT / 100;
+    const earlyCooldown = earlyAt > 0 && clock.getTime() - earlyAt * 1000 < EARLY_LIQUIDITY_COOLDOWN_MS;
+    if (earlyCondition && !earlyCooldown) {
+      const elapsed = ts - pendingAt;
+      if (pendingAt > 0 && elapsed >= 30 && elapsed <= EARLY_LIQUIDITY_CONFIRM_MAX_SECONDS) {
+        if (rugAlerts + earlyLiquidityAlerts < RUG_MAX_ALERTS_PER_REFRESH) {
+          try {
+            await client.request('/channels/' + channelId + '/messages', {
+              method: 'POST', body: {
+                embeds: [createEarlyLiquidityAlertEmbed(token, pair, oldLiquidity, clock)],
+                allowed_mentions: { parse: [] },
+              },
+            });
+            earlyLiquidityAlerts++;
+            notifiedEarlyAt = ts;
+            pendingAt = 0;
+          } catch (error) {
+            console.error('[tracker:liquidity] Could not post early warning for', token.chain, error.message);
+            // Hold the baseline; a further valid reading can retry.
+          }
+        }
+      } else if (!pendingAt || elapsed > EARLY_LIQUIDITY_CONFIRM_MAX_SECONDS) {
+        pendingAt = ts;
+      }
+    } else {
+      pendingAt = 0;
+    }
+    if (critical || liquidity > oldLiquidity * 1.25) {
+      token.r = [candidate[0], candidate[1], candidate[2], candidate[3],
+        confirmedRugAt, 0, notifiedEarlyAt];
+      changed = true;
+    } else if (pendingAt !== (Number(prior?.[5]) || 0) ||
+               notifiedEarlyAt !== earlyAt) {
+      token.r = [...prior.slice(0, 4), confirmedRugAt, pendingAt, notifiedEarlyAt];
       changed = true;
     }
   }
-  if (changed) await saveStore(client, store);
-  return { rugAlerts, rugEnabled: true };
+  if (changed && persist) await saveStore(client, store);
+  return { rugAlerts, earlyLiquidityAlerts, rugEnabled: true };
 }
 
 // DEX Screener reports rolling price changes and buy/sell transaction counts.
@@ -668,11 +794,12 @@ const SELLOFF_MAX_ALERTS_PER_REFRESH = 5;
 export const SELLOFF_RULES = Object.freeze({
   m5: { minPriceDropPct: 20, minTransactions: 20, minSellBuyRatio: 2 },
   h1: { minPriceDropPct: 35, minTransactions: 50, minSellBuyRatio: 2 },
+  h6: { minPriceDropPct: 45, minTransactions: 100, minSellBuyRatio: 1.5 },
 });
 
 export function detectLargeSelloff(pair) {
   if (!pair) return null;
-  for (const window of ['m5','h1']) {
+  for (const window of ['m5','h1','h6']) {
     const rule = SELLOFF_RULES[window];
     const change = pair.priceChange?.[window];
     const buysRaw = pair.txns?.[window]?.buys;
@@ -685,7 +812,7 @@ export function detectLargeSelloff(pair) {
     if (!Number.isFinite(priceChange) || !Number.isSafeInteger(buys) ||
         !Number.isSafeInteger(sells) || buys < 0 || sells < 0) continue;
     if (priceChange > -rule.minPriceDropPct || buys + sells < rule.minTransactions ||
-        sells < 2 * buys || sells === 0) continue;
+        sells < rule.minSellBuyRatio * buys || sells === 0) continue;
     return { window, priceChange, buys, sells };
   }
   return null;
@@ -696,10 +823,10 @@ export function createSelloffAlertEmbed(token, pair, signal, clock = new Date())
   const chain = safeText(token.chain, 16).toUpperCase();
   const chart = dexChartUrl(pair);
   const tick = String.fromCharCode(96);
-  const period = signal.window === 'm5' ? '5 minutes' : '1 hour';
+  const period = signal.window === 'm5' ? '5 minutes' : signal.window === 'h1' ? '1 hour' : '6 hours';
   const ratio = signal.buys > 0 ? (signal.sells / signal.buys).toFixed(2) + '×' : 'No buys';
   return {
-    title: '🟥 Large Selloff Detected',
+    title: signal.window === 'h6' ? '🟥 Slow Bleed Detected' : '🟥 Large Selloff Detected',
     description: [
       '**' + symbol + '** · ' + chain,
       'Price change (' + period + '): **' + signal.priceChange.toFixed(2) + '%**',
@@ -717,7 +844,7 @@ export function createSelloffAlertEmbed(token, pair, signal, clock = new Date())
   };
 }
 
-export async function updateLargeSelloffs(client, store, entries, { now } = {}) {
+export async function updateLargeSelloffs(client, store, entries, { now, persist = true } = {}) {
   const channelId = store.config.selloffChannelId;
   if (!channelId) return { selloffAlerts: 0, selloffEnabled: false };
   const clock = typeof now === 'function' ? now() : new Date();
@@ -743,18 +870,182 @@ export async function updateLargeSelloffs(client, store, entries, { now } = {}) 
       // No cooldown after failure: retry on next refresh.
     }
   }
-  if (changed) await saveStore(client, store);
+  if (changed && persist) await saveStore(client, store);
   return { selloffAlerts: alerts, selloffEnabled: true };
 }
 
-export async function publishDashboard(client, store, { fetcher, now } = {}) {
+// Keep a compact per-token record of the most recent attempted market check:
+// [checkedAtSeconds, 0=OK/1=no pool/2=API failure, poolSwitchedFlag].
+// This enables diagnostics even when a later manual DEX lookup fails.
+export function captureMarketDiagnostics(entries, clock = new Date()) {
+  const ts = Math.floor(clock.getTime() / 1000);
+  for (const { token, pair, error } of entries) {
+    const current = poolKey(pair);
+    const previous = token.p || token.r?.[0] || '';
+    const switched = Boolean(current && previous && current !== previous);
+    if (current) token.p = current;
+    if (switched || !pair) delete token.q;
+    // A missing market sample cannot complete a two-reading ATH confirmation.
+    token.d = [ts, pair ? 0 : error ? 2 : 1, switched ? 1 : 0];
+  }
+}
+
+// Read current stored state once before committing refreshed observations.
+// Preserve channel configuration and token removals made during this refresh,
+// and merge monotonic ATH/cooldown history. This lowers stale-write risk; since
+// Discord does not offer conditional edits, it isn't a distributed CAS lock.
+export async function saveRefreshState(client, store) {
+  const url = '/channels/' + store.configChannelId + '/messages/' + store.configMessageId;
+  try {
+    const remoteMessage = await client.request(url, { allow404: true });
+    const latest = parseConfig(remoteMessage);
+    if (latest) {
+      const localByKey = new Map(store.config.tokens.map(t => [t.chain + ':' + t.address, t]));
+      const mergeMax = (a,b) => Math.max(Number(a) || 0, Number(b) || 0);
+      const tokens = latest.tokens.map(remote => {
+        const local = localByKey.get(remote.chain + ':' + remote.address);
+        if (!local) return remote; // do not resurrect tokens removed by a command
+        const merged = { ...remote };
+        for (const property of ['h','a','t','s']) {
+          const value = mergeMax(local[property], remote[property]);
+          if (value) merged[property] = value;
+        }
+        if (!merged.b && local.b) merged.b = local.b;
+        const older = Array.isArray(remote.r) ? remote.r : null;
+        const newer = Array.isArray(local.r) ? local.r : null;
+        if (newer || older) {
+          const preferred = !older ? newer : !newer ? older :
+            Number(newer[3] || 0) >= Number(older[3] || 0) ? newer : older;
+          if (preferred) {
+            merged.r = [...preferred];
+            merged.r[4] = mergeMax(newer?.[4], older?.[4]);
+            if (newer?.[5] || older?.[5]) merged.r[5] = Number(preferred?.[5]) || 0;
+            merged.r[6] = mergeMax(newer?.[6], older?.[6]);
+          }
+        }
+        const remoteAt = Number(remote.d?.[0]) || 0;
+        const localAt = Number(local.d?.[0]) || 0;
+        if (localAt >= remoteAt && Array.isArray(local.d)) {
+          merged.d = local.d;
+          if (local.p) merged.p = local.p;
+          if (local.q) merged.q = local.q;
+          else delete merged.q;
+          if (local.symbol) merged.symbol = local.symbol;
+        }
+        return merged;
+      });
+      store.config = { ...latest, tokens };
+    }
+  } catch (error) {
+    // Some test clients and transient Discord requests cannot read by message
+    // ID. The regular save remains available, but a concurrent writer may race.
+    console.warn('[tracker:reconcile] Could not reload latest storage', error.message);
+  }
+  await saveStore(client, store);
+}
+
+export function buildAlertDiagnostics(token, pair, config, clock = new Date(), lookupError = null) {
+  const symbol = safeText(token.symbol || pair?.baseToken?.symbol || token.address, 24) || 'Unknown token';
+  const d = Array.isArray(token.d) ? token.d : [];
+  const lastAt = Number(d[0]) || 0;
+  const status = d[1] === 0 ? 'Market data OK' : d[1] === 1 ? 'No priced pool' :
+    d[1] === 2 ? 'DEX API error' : 'No saved sample yet';
+  const pool = poolKey(pair) || token.p || token.r?.[0] || 'Unknown';
+  const sell = detectLargeSelloff(pair);
+  const sellCooldown = token.s && clock.getTime() - Number(token.s) * 1000 < SELLOFF_ALERT_COOLDOWN_MS;
+  const mc = observedMarketCap(pair);
+  const athBase = Math.max(Number(token.h) || 0, Number(token.b) || 0);
+  const athCooldown = token.t && clock.getTime() - Number(token.t) * 1000 < ATH_ALERT_COOLDOWN_MS;
+  const before = Array.isArray(token.r) ? token.r : [];
+  const age = clock.getTime() / 1000 - (Number(before[3]) || 0);
+  const samePool = Boolean(pair && before[0] && before[0] === pool);
+  const baseline = Number(before[1]);
+  const liquidity = pair?.liquidity?.usd == null ? NaN : Number(pair.liquidity.usd);
+  const drop = samePool && age > 0 && age <= 900 && baseline >= RUG_MIN_BASE_LIQUIDITY_USD &&
+    Number.isFinite(liquidity) ? (1 - liquidity / baseline) * 100 : null;
+  const historicalPrice = Number(before[2]);
+  const livePrice = Number(pair?.priceUsd);
+  const priceDrop = drop != null && historicalPrice > 0 && Number.isFinite(livePrice)
+    ? (1 - livePrice / historicalPrice) * 100 : null;
+  const meetsCritical = drop !== null && (drop >= 95 ||
+    (drop >= 70 && priceDrop !== null && priceDrop >= 50));
+  const meetsEarly = drop !== null && !meetsCritical && drop >= EARLY_LIQUIDITY_DROP_PCT;
+  const athNotificationBaseline = Math.max(Number(token.a) || Number(token.h) || 0,
+    Number(token.b) || 0);
+  const minAthPercent = Math.max(ATH_ALERT_MIN_INCREASE_PCT,
+    Number(config.athMinPct) || 0);
+  const athGain = athNotificationBaseline > 0 && mc !== null
+    ? (mc / athNotificationBaseline - 1) * 100 : null;
+  const athEligible = mc !== null && mc > (Number(token.h) || 0) &&
+    athGain !== null && athGain >= minAthPercent;
+  const criticalCooldown = before[4] && clock.getTime() - Number(before[4]) * 1000 < RUG_ALERT_COOLDOWN_MS;
+  const earlyCooldown = before[6] && clock.getTime() - Number(before[6]) * 1000 < EARLY_LIQUIDITY_COOLDOWN_MS;
+  const parts = [
+    '**Alert Diagnostics · ' + symbol + '**',
+    'Last scheduled check: ' + (lastAt ? '<t:' + lastAt + ':R> · ' + status : 'Not yet sampled'),
+    'Selected pool: ' + String.fromCharCode(96) + safeText(pool, 24) + String.fromCharCode(96) +
+      (d[2] ? ' · changed on latest check' : ''),
+    'Live lookup: ' + (lookupError ? 'API error: ' + safeText(lookupError, 75) :
+      pair ? 'Market data available' : 'No priced pool'),
+    '**Selloff:** ' + (!config.selloffChannelId ? 'Disabled' : !pair ? 'Unavailable · market data missing' :
+      sell ? (sell.window + ' conditions met' + (sellCooldown ? ' · cooldown active' : ' · eligible now')) :
+      'No 5m, 1h or 6h condition met') +
+      (token.s ? ' · last alert <t:' + Number(token.s) + ':R>' : ''),
+    '**Rug/Liquidity:** ' + (!config.rugChannelId ? 'Disabled' :
+      drop === null ? 'No recent same-pool baseline; waiting for samples' :
+      drop.toFixed(1) + '% USD liquidity drop from baseline' +
+        (meetsCritical ? ' · CRITICAL threshold met' :
+          meetsEarly ? ' · early-warning threshold met' : ' · below warning thresholds') +
+        (criticalCooldown ? ' · critical cooldown' : '') +
+        (earlyCooldown ? ' · early-warning cooldown' : '') +
+        (before[5] ? ' · confirmation pending' : '')),
+    '**ATH:** ' + (!config.athChannelId ? 'Notifications off' :
+      mc == null ? 'No live market cap' :
+      'MC ' + formatCompact(mc, {usd:true}) + ' · recorded high ' +
+        formatCompact(athBase, {usd:true}) +
+        (athEligible ? ' · gain threshold met' : ' · no qualifying new high') +
+        (athCooldown ? ' · cooldown active' : '') +
+        (token.q ? ' · spike confirmation pending' : '')),
+    '_Live market conditions may differ from the previous refresh; this is not a historical audit._',
+  ];
+  return parts.join('\n').slice(0, 1850);
+}
+
+// Coalesce overlapping refresh calls within one Node instance. Across
+// separate serverless instances the pre-save reconciliation below reduces
+// (but cannot eliminate) races without a transactional external database.
+const inFlightDashboards = new Map();
+export async function publishDashboard(client, store, options = {}) {
+  const key = store.configChannelId + ':' + store.configMessageId;
+  if (inFlightDashboards.has(key)) {
+    return { ...(await inFlightDashboards.get(key)), coalesced: true };
+  }
+  const task = publishDashboardCore(client, store, options);
+  inFlightDashboards.set(key, task);
+  try { return await task; }
+  finally { if (inFlightDashboards.get(key) === task) inFlightDashboards.delete(key); }
+}
+
+async function publishDashboardCore(client, store, { fetcher, now } = {}) {
   const tokens = store.config.tokens;
+  const clock = typeof now === 'function' ? now() : new Date();
   const entries = await fetchAllPairs(tokens, fetcher);
-  await hydrateTokenSymbols(client, store, { entries });
-  const highs = await updateObservedHighs(client, store, entries, { now });
-  const rugs = await updateRugWatch(client, store, entries, { now });
-  const selloffs = await updateLargeSelloffs(client, store, entries, { now });
-  const pages = createDashboardPages(entries, now ? now() : new Date());
+  // Establish pool identity and check status before evaluating alert rules.
+  captureMarketDiagnostics(entries, clock);
+  // One state write instead of a separate edit for each alert family.
+  await hydrateTokenSymbols(client, store, { entries, persist: false });
+  const highs = await updateObservedHighs(client, store, entries, { now, persist: false });
+  const rugs = await updateRugWatch(client, store, entries, { now, persist: false });
+  const selloffs = await updateLargeSelloffs(client, store, entries, { now, persist: false });
+  await saveRefreshState(client, store);
+  const originalKeys = tokens.map(t => t.chain + ':' + t.address);
+  const storedKeys = store.config.tokens.map(t => t.chain + ':' + t.address);
+  if (originalKeys.join('|') !== storedKeys.join('|')) {
+    // Avoid restoring deleted tokens or publishing a stale watchlist. The next
+    // cron refresh will fetch the latest token selection.
+    return { deferred: true, count: store.config.tokens.length, ...highs, ...rugs, ...selloffs };
+  }
+  const pages = createDashboardPages(entries, clock);
   const content = dashboardMessageContent(tokens.length);
   const channelId = store.config.dashboardChannelId;
   const previousIds = Array.isArray(store.config.dashboardMessageIds) && store.config.dashboardMessageIds.length

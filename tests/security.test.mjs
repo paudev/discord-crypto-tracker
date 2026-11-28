@@ -32,7 +32,7 @@ test('commands require server management permission', () => {
   const names=TRACKER_COMMAND.options.map(x=>x.name);
   for(const required of ['add','remove','list','refresh','channel','storage','ath-channel',
     'ath-preview','ath-set','rug-channel','rug-preview','rug-off','rug-status',
-    'selloff-channel','selloff-off','selloff-status','selloff-preview','help']) {
+    'selloff-channel','selloff-off','selloff-status','selloff-preview','alert-diagnostics','help']) {
     assert.ok(names.includes(required), 'Missing slash command '+required);
   }
   assert.equal(new Set(names).size,names.length);

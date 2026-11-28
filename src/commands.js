@@ -1,6 +1,6 @@
 import { CHAIN_CHOICES, MAX_TOKENS, safeText } from './discord.js';
 import { normalizeToken, fetchTokenPair } from './dexscreener.js';
-import { cleanupStores, createHighAlertEmbed, createRugAlertEmbed, createSelloffAlertEmbed, hydrateTokenSymbols, loadStore, publishDashboard, saveStore, selectStorageChannel } from './tracker.js';
+import { cleanupStores, buildAlertDiagnostics, createHighAlertEmbed, createRugAlertEmbed, createSelloffAlertEmbed, hydrateTokenSymbols, loadStore, publishDashboard, saveStore, selectStorageChannel } from './tracker.js';
 
 const STRING = 3;
 const CHANNEL = 7;
@@ -32,6 +32,9 @@ export const TRACKER_COMMAND = {
     ] },
     { type: SUBCOMMAND, name: 'storage', description: 'Choose an existing private text channel for tracker data', options: [
       { type: CHANNEL, name: 'target', description: 'Your private data channel (move it and set role permissions in Discord)', required: true, channel_types: [0] },
+    ] },
+    { type: SUBCOMMAND, name: 'alert-diagnostics', description: 'Explain recent market checks and why token alerts may not fire', options: [
+      { type: STRING, name: 'token', description: 'Tracked symbol or contract (defaults to first token)', required: false },
     ] },
     { type: SUBCOMMAND, name: 'selloff-channel', description: 'Choose a channel for large selling-pressure warnings', options: [
       { type: CHANNEL, name: 'target', description: 'Text channel for selloff alerts (may be the rug channel)', required: true, channel_types: [0] },
@@ -74,7 +77,7 @@ export const TRACKER_COMMAND = {
 };
 
 
-const REGISTERED_COMMAND_REVISION = 7;
+const REGISTERED_COMMAND_REVISION = 8;
 
 /** Register newly added slash commands once from the existing authenticated refresh. */
 export async function syncTrackerCommandsIfNeeded(client, store, applicationId, guildId) {
@@ -117,6 +120,7 @@ const helpText = [
   '• `/tracker rug-status` · `/tracker rug-preview` · `/tracker rug-off` — manage and test rug watch',
   '• `/tracker selloff-channel target:#your-channel` — large selloff alerts (can share Rug Watch channel)',
   '• `/tracker selloff-status` · `/tracker selloff-preview` · `/tracker selloff-off` — manage and test selloffs',
+  '• `/tracker alert-diagnostics token:GOO` — inspect last market check, selected pool and alert eligibility',
   '• `/tracker channel target:#crypto-prices` — move the public dashboard',
   '• `/tracker storage target:#my-private-channel` — choose the private storage channel; set roles/categories in Discord',
   '• `/tracker cleanup` — merge watchlists and remove safe duplicate bot-created storage channels',
@@ -185,6 +189,17 @@ export async function executeTrackerCommand({ interaction, client, applicationId
   // Upgrade legacy raw JSON storage to a readable embed without posting to the price dashboard.
   if (store.needsMigration) await saveStore(client, store);
 
+  if (command.name === 'alert-diagnostics') {
+    if (!store.config.tokens.length) return 'No tracked tokens. Add one with /tracker add.';
+    const search = String(optionValue(command, 'token') || '').trim();
+    const tokens = search ? findTracked(store.config.tokens, search) : [store.config.tokens[0]];
+    if (!tokens.length) return 'No matching tracked token. Use a symbol or contract from /tracker list.';
+    if (tokens.length > 1) return 'Multiple tracked tokens share this symbol; specify the contract address.';
+    let pair = null, lookupError = null;
+    try { pair = await fetchTokenPair(tokens[0], fetcher); }
+    catch (error) { lookupError = error.message; }
+    return buildAlertDiagnostics(tokens[0], pair, store.config, new Date(), lookupError);
+  }
   if (command.name === 'selloff-channel') {
     const channelId = optionValue(command, 'target');
     if (!/^\d{16,22}$/.test(String(channelId ?? ''))) return 'Choose a valid text channel.';
@@ -198,6 +213,7 @@ export async function executeTrackerCommand({ interaction, client, applicationId
     return '✅ Large Selloff alerts enabled in <#' + channelId +
       '>. Rapid: ≥20% price drop in 5m, ≥20 transactions and ≥2 sells per buy. ' +
       'Sustained: ≥35% price drop in 1h, ≥50 transactions and ≥2 sells per buy. ' +
+      'Slow Bleed: ≥45% in 6h with ≥100 transactions and ≥1.5 sells per buy. ' +
       '60-minute per-token cooldown. Rug Watch and ATH alert channels are unchanged.';
   }
   if (command.name === 'selloff-off') {
@@ -212,6 +228,7 @@ export async function executeTrackerCommand({ interaction, client, applicationId
       '\nTracked tokens: ' + store.config.tokens.length + '/' + MAX_TOKENS +
       '\nRapid: ≥20% price drop in 5m, ≥20 trades and ≥2 sell transactions per buy' +
       '\nSustained: ≥35% price drop in 1h, ≥50 trades and ≥2 sell transactions per buy' +
+      '\nSlow Bleed: ≥45% price drop in 6h, ≥100 trades and ≥1.5 sell transactions per buy' +
       '\nCooldown: 60 minutes per token · Previously alerted tokens: ' + last +
       '\nChecks once per minute with the dashboard. Buy/sell counts are transactions, not dollar volume.' +
       '\nThis warns about selling pressure, not proven rug pulls.';
@@ -262,7 +279,7 @@ export async function executeTrackerCommand({ interaction, client, applicationId
     store.config.rugChannelId = channelId;
     await saveStore(client, store);
     return '✅ Rug watch enabled in <#' + channelId +
-      '>. It warns about a 95%+ liquidity drop, or 70%+ liquidity and 50%+ price drops within 15 minutes on the same pool. First refresh establishes baselines. These are warnings, not verified rugs.';
+      '>. Critical alerts: 95%+ liquidity drop, or 70%+ liquidity and 50%+ price loss in 15m. Early warnings: ≥60% USD liquidity drop confirmed twice. Not proof of fraud.';
   }
   if (command.name === 'rug-off') {
     store.config.rugChannelId = null;
@@ -277,7 +294,8 @@ export async function executeTrackerCommand({ interaction, client, applicationId
       '\nSampled pools: ' + sampled +
       '\nTrigger: ≥95% liquidity loss OR ≥70% liquidity loss and ≥50% price loss' +
       '\nOnly the same pool and samples ≤15 minutes apart; starting liquidity ≥$5,000' +
-      '\n6-hour per-token cooldown · Data outages and pool switches never trigger a warning.' +
+      '\nEarly warning: ≥60% USD liquidity drop confirmed in 2 consecutive checks · 2-hour cooldown' +
+      '\n6-hour critical cooldown · Data outages and pool switches never trigger a warning.' +
       '\nNot a fraud determination.';
   }
   if (command.name === 'rug-preview') {

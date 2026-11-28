@@ -18,12 +18,26 @@ function matchAddress(a, b, chain) {
   return chain === 'solana' ? a === b : String(a).toLowerCase() === String(b).toLowerCase();
 }
 
+// A compact identifier lets the tracker keep the same pool between refreshes,
+// even when another liquidity pool briefly becomes larger. Switching pools can
+// otherwise create spurious market-cap ATHs and hide real liquidity declines.
+export function poolKey(pair) {
+  const address = String(pair?.pairAddress || '');
+  return address.length > 20 ? address.slice(0, 8) + address.slice(-8) : address;
+}
 export function selectBestPair(pairs, token) {
   if (!Array.isArray(pairs)) return null;
-  return pairs
-    .filter(p => p && p.chainId === token.chain && matchAddress(p.baseToken?.address, token.address, token.chain)
-      && Number.isFinite(Number(p.priceUsd)) && Number(p.priceUsd) > 0)
-    .sort((a, b) => Number(b.liquidity?.usd || 0) - Number(a.liquidity?.usd || 0))[0] ?? null;
+  const valid = pairs.filter(p => p && p.chainId === token.chain &&
+    matchAddress(p.baseToken?.address, token.address, token.chain) &&
+    Number.isFinite(Number(p.priceUsd)) && Number(p.priceUsd) > 0);
+  // Keep an established pool while DEX still returns valid prices for it.
+  const preferred = token.p || token.r?.[0];
+  if (preferred) {
+    const matched = valid.find(p => poolKey(p) === preferred);
+    if (matched) return matched;
+  }
+  return valid.sort((a, b) =>
+    Number(b.liquidity?.usd || 0) - Number(a.liquidity?.usd || 0))[0] ?? null;
 }
 
 export async function fetchTokenPair(token, fetcher = globalThis.fetch) {
