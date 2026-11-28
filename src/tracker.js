@@ -1,5 +1,5 @@
 import { CONFIG_MARKER, MAX_TOKENS, safeText } from './discord.js';
-import { fetchAllPairs } from './dexscreener.js';
+import { fetchAllPairs, poolKey } from './dexscreener.js';
 import { deflateRawSync, inflateRawSync } from 'node:zlib';
 
 const CONFIG_CHANNEL_NAME = 'crypto-tracker-data';
@@ -668,11 +668,12 @@ const SELLOFF_MAX_ALERTS_PER_REFRESH = 5;
 export const SELLOFF_RULES = Object.freeze({
   m5: { minPriceDropPct: 20, minTransactions: 20, minSellBuyRatio: 2 },
   h1: { minPriceDropPct: 35, minTransactions: 50, minSellBuyRatio: 2 },
+  h6: { minPriceDropPct: 45, minTransactions: 100, minSellBuyRatio: 1.5 },
 });
 
 export function detectLargeSelloff(pair) {
   if (!pair) return null;
-  for (const window of ['m5','h1']) {
+  for (const window of ['m5','h1','h6']) {
     const rule = SELLOFF_RULES[window];
     const change = pair.priceChange?.[window];
     const buysRaw = pair.txns?.[window]?.buys;
@@ -685,7 +686,7 @@ export function detectLargeSelloff(pair) {
     if (!Number.isFinite(priceChange) || !Number.isSafeInteger(buys) ||
         !Number.isSafeInteger(sells) || buys < 0 || sells < 0) continue;
     if (priceChange > -rule.minPriceDropPct || buys + sells < rule.minTransactions ||
-        sells < 2 * buys || sells === 0) continue;
+        sells < rule.minSellBuyRatio * buys || sells === 0) continue;
     return { window, priceChange, buys, sells };
   }
   return null;
@@ -696,10 +697,10 @@ export function createSelloffAlertEmbed(token, pair, signal, clock = new Date())
   const chain = safeText(token.chain, 16).toUpperCase();
   const chart = dexChartUrl(pair);
   const tick = String.fromCharCode(96);
-  const period = signal.window === 'm5' ? '5 minutes' : '1 hour';
+  const period = signal.window === 'm5' ? '5 minutes' : signal.window === 'h1' ? '1 hour' : '6 hours';
   const ratio = signal.buys > 0 ? (signal.sells / signal.buys).toFixed(2) + '×' : 'No buys';
   return {
-    title: '🟥 Large Selloff Detected',
+    title: signal.window === 'h6' ? '🟥 Slow Bleed Detected' : '🟥 Large Selloff Detected',
     description: [
       '**' + symbol + '** · ' + chain,
       'Price change (' + period + '): **' + signal.priceChange.toFixed(2) + '%**',
