@@ -179,9 +179,11 @@ test('high-entropy 25-token configuration survives multi-field private storage',
     h:rng()*1e11,a:rng()*1e11,b:rng()*1e11,t:1000000000+Math.floor(rng()*9e8),
     r:[randText(16),Math.round(rng()*1e7*100)/100,Number(rng().toPrecision(9)),
       1000000000+Math.floor(rng()*9e8),1000000000+Math.floor(rng()*9e8)],
+    s:1000000000+Math.floor(rng()*9e8),
   }));
   const config={version:1,dashboardChannelId:DASH,dashboardMessageId:DASH,
-    dashboardMessageIds:[DASH,MSG,RUG],athChannelId:RUG,rugChannelId:RUG,cv:6,tokens};
+    dashboardMessageIds:[DASH,MSG,RUG],athChannelId:RUG,rugChannelId:RUG,
+    selloffChannelId:RUG,cv:7,tokens};
   const embed=createStorageEmbed(config);
   assert.ok(Array.isArray(embed.fields) && embed.fields.length>0);
   assert.ok(embed.description.length<=4096);
