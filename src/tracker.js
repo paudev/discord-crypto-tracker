@@ -872,7 +872,8 @@ export async function saveRefreshState(client, store) {
         const older = Array.isArray(remote.r) ? remote.r : null;
         const newer = Array.isArray(local.r) ? local.r : null;
         if (newer || older) {
-          const preferred = Number(newer?.[3]) >= Number(older?.[3]) ? newer : older;
+          const preferred = !older ? newer : !newer ? older :
+            Number(newer[3] || 0) >= Number(older[3] || 0) ? newer : older;
           if (preferred) {
             merged.r = [...preferred];
             merged.r[4] = mergeMax(newer?.[4], older?.[4]);
