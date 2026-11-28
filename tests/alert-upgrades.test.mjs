@@ -279,3 +279,27 @@ test('high-entropy maximum 25-token alert history fits Discord storage after upg
  assert.ok(embed.description.length<=4096);
  assert.deepEqual(parseConfig({embeds:[embed]}),cfg);
 });
+
+
+test('invalid priced sample interrupts early liquidity confirmation instead of generating a false alert',async()=>{
+ const f=fixture();
+ await updateRugWatch(f.client,f.store,entries(f,pair()),date(0));
+ await updateRugWatch(f.client,f.store,entries(f,pair({liq:4300})),date(1));
+ await updateRugWatch(f.client,f.store,entries(f,pair({liq:null,price:-1})),date(2));
+ assert.equal(f.item.r[5],0);
+ const next=await updateRugWatch(f.client,f.store,entries(f,pair({liq:4300})),date(3));
+ assert.equal(next.earlyLiquidityAlerts,0);
+ const confirmed=await updateRugWatch(f.client,f.store,entries(f,pair({liq:4200})),date(4));
+ assert.equal(confirmed.earlyLiquidityAlerts,1);
+});
+test('missing API sample cancels pending ATH spike confirmation',async()=>{
+ const f=fixture({rug:false,ath:true,t:{...token(),h:30000,a:30000}});
+ await updateObservedHighs(f.client,f.store,entries(f,pair({mc:180000})),date(0));
+ assert.ok(f.item.q);
+ captureMarketDiagnostics([{token:f.item,pair:null,error:'429'}],
+   new Date('2026-11-28T00:01:00Z'));
+ assert.equal(f.item.q,undefined);
+ await updateObservedHighs(f.client,f.store,entries(f,pair({mc:175000})),date(2));
+ assert.equal(f.messages.length,0);
+ assert.ok(f.item.q);
+});
