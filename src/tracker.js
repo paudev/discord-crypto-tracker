@@ -582,57 +582,90 @@ export function createRugAlertEmbed(token, pair, beforeLiquidity, beforePrice, c
   };
 }
 
+export const EARLY_LIQUIDITY_DROP_PCT = 60;
+export const EARLY_LIQUIDITY_COOLDOWN_MS = 2 * 60 * 60 * 1000;
+const EARLY_LIQUIDITY_CONFIRM_MAX_SECONDS = 150;
+
+export function createEarlyLiquidityAlertEmbed(token, pair, beforeLiquidity, clock = new Date()) {
+  const nowLiquidity = Number(pair.liquidity?.usd);
+  const dropPct = (1 - nowLiquidity / beforeLiquidity) * 100;
+  const symbol = safeText(pair.baseToken?.symbol || token.symbol, 24) || 'Unknown token';
+  const chart = dexChartUrl(pair);
+  const tick = String.fromCharCode(96);
+  return {
+    title: '⚠️ Early Liquidity Warning',
+    description: [
+      '**' + symbol + '** · ' + safeText(token.chain, 16).toUpperCase(),
+      'Liquidity (USD): **' + formatCompact(beforeLiquidity, { usd: true }) +
+        '** → **' + formatCompact(nowLiquidity, { usd: true }) +
+        '** (🟥 -' + dropPct.toFixed(1) + '%)',
+      'Price: **' + formatPrice(pair.priceUsd) + '**',
+      'Confirmed in two consecutive valid market readings from the same pool.',
+      (chart ? '[View chart](' + chart + ') · ' : '') +
+        'CA ' + tick + shortAddress(token.address) + tick,
+    ].join('\n'),
+    color: 0xf59e0b,
+    footer: { text: 'Early warning · USD liquidity also changes with market prices · Not proof of LP withdrawal or rug' },
+    timestamp: clock.toISOString(),
+  };
+}
+
 export async function updateRugWatch(client, store, entries, { now } = {}) {
   const channelId = store.config.rugChannelId;
-  if (!channelId) return { rugAlerts: 0, rugEnabled: false };
+  if (!channelId) return { rugAlerts: 0, earlyLiquidityAlerts: 0, rugEnabled: false };
   const clock = typeof now === 'function' ? now() : new Date();
   const ts = Math.floor(clock.getTime() / 1000);
-  let rugAlerts = 0, changed = false;
+  let rugAlerts = 0, earlyLiquidityAlerts = 0, changed = false;
   for (const { token, pair } of entries) {
-    if (!pair) continue; // API error or missing pool is NOT evidence of a rug.
-    const liquidity = pair.liquidity?.usd == null ? NaN : Number(pair.liquidity.usd);
-    const price = pair.priceUsd == null ? NaN : Number(pair.priceUsd);
-    const address = String(pair.pairAddress || '');
-    // A compact pool fingerprint keeps 25-token private storage manageable.
-    const poolKey = address.length > 20 ? address.slice(0, 8) + address.slice(-8) : address;
-    if (!address || !Number.isFinite(liquidity) || liquidity < 0 ||
-        !Number.isFinite(price) || price <= 0) continue;
-    // Compact persistent sample: [pair, liquidityUsd, priceUsd, sampledAt, alertedAt].
     const prior = Array.isArray(token.r) ? token.r : null;
-    const lastAlert = Number(prior?.[4]) || 0;
-    const oldLiquidity = Number(prior?.[1]);
-    const oldPrice = Number(prior?.[2]);
-    const samePool = prior?.[0] === poolKey;
-    const ageMs = (ts - (Number(prior?.[3]) || 0)) * 1000;
-    const recent = samePool && ageMs > 0 && ageMs <= RUG_MAX_SAMPLE_GAP_MS;
-    const healthy = oldLiquidity >= RUG_MIN_BASE_LIQUIDITY_USD &&
-      Number.isFinite(oldPrice) && oldPrice > 0;
-    const liquidityDrop = recent && healthy ? 1 - liquidity / oldLiquidity : 0;
-    const priceDrop = recent && healthy ? 1 - price / oldPrice : 0;
-    // Either >95% of liquidity removed, or >70% liquidity plus >50% price fall.
-    const suspicious = liquidityDrop >= 0.95 ||
-      (liquidityDrop >= 0.70 && priceDrop >= 0.50);
-    const cooldown = lastAlert > 0 && clock.getTime() - lastAlert * 1000 < RUG_ALERT_COOLDOWN_MS;
-    const current = [poolKey, Math.round(liquidity * 100) / 100,
-      Number(price.toPrecision(9)), ts, lastAlert];
-    // Hold a reference point for up to 15 minutes, so gradual drains can
-    // accumulate. Avoid writing private storage on unchanged minute ticks.
-    if (!recent) {
-      token.r = current;
-      changed = true;
-      continue;
-    }
-    if (!healthy) {
-      if (liquidity >= RUG_MIN_BASE_LIQUIDITY_USD &&
-          liquidity > oldLiquidity * 1.25) {
-        token.r = current;
+    if (!pair) {
+      // A missing/API-failed reading must break an early-warning confirmation.
+      if (Number(prior?.[5]) > 0) {
+        token.r = [...prior.slice(0, 5), 0, Number(prior?.[6]) || 0];
         changed = true;
       }
       continue;
     }
-    let alertedAt = lastAlert;
-    if (suspicious && !cooldown) {
-      // Prevent mass alert spikes from exceeding serverless/Discord rate limits.
+    const liquidity = pair.liquidity?.usd == null ? NaN : Number(pair.liquidity.usd);
+    const price = pair.priceUsd == null ? NaN : Number(pair.priceUsd);
+    const key = poolKey(pair);
+    if (!key || !Number.isFinite(liquidity) || liquidity < 0 ||
+        !Number.isFinite(price) || price <= 0) continue;
+    // Compact persisted sample:
+    // [pool, baselineLiquidity, baselinePrice, sampledAt, rugAlertAt,
+    //  pendingEarlyWarningAt, lastEarlyWarningAt].
+    const lastRugAt = Number(prior?.[4]) || 0;
+    const earlyAt = Number(prior?.[6]) || 0;
+    const oldLiquidity = Number(prior?.[1]);
+    const oldPrice = Number(prior?.[2]);
+    const age = ts - (Number(prior?.[3]) || 0);
+    const recent = prior?.[0] === key && age > 0 && age <= RUG_MAX_SAMPLE_GAP_MS / 1000;
+    const healthy = oldLiquidity >= RUG_MIN_BASE_LIQUIDITY_USD &&
+      Number.isFinite(oldPrice) && oldPrice > 0;
+    const candidate = [key, Math.round(liquidity * 100) / 100,
+      Number(price.toPrecision(9)), ts, lastRugAt, 0, earlyAt];
+    if (!recent) {
+      token.r = candidate;
+      changed = true;
+      continue;
+    }
+    if (!healthy) {
+      if (liquidity >= RUG_MIN_BASE_LIQUIDITY_USD && liquidity > oldLiquidity * 1.25) {
+        token.r = candidate;
+        changed = true;
+      } else if (Number(prior?.[5]) > 0) {
+        token.r = [...prior.slice(0, 5), 0, earlyAt];
+        changed = true;
+      }
+      continue;
+    }
+    const liquidityDrop = 1 - liquidity / oldLiquidity;
+    const priceDrop = 1 - price / oldPrice;
+    const critical = liquidityDrop >= 0.95 ||
+      (liquidityDrop >= 0.70 && priceDrop >= 0.50);
+    const rugCooldown = lastRugAt > 0 && clock.getTime() - lastRugAt * 1000 < RUG_ALERT_COOLDOWN_MS;
+    let confirmedRugAt = lastRugAt;
+    if (critical && !rugCooldown) {
       if (rugAlerts >= RUG_MAX_ALERTS_PER_REFRESH) continue;
       try {
         await client.request('/channels/' + channelId + '/messages', {
@@ -641,23 +674,55 @@ export async function updateRugWatch(client, store, entries, { now } = {}) {
             allowed_mentions: { parse: [] },
           },
         });
-        alertedAt = ts;
+        confirmedRugAt = ts;
         rugAlerts++;
       } catch (error) {
-        // Preserve the previous baseline, so the next healthy refresh can retry.
         console.error('[tracker:rug] Could not alert for', token.chain, error.message);
-        continue;
+        continue; // keep old baseline so the next refresh can retry
       }
     }
-    // After a warning/cooldown reset the reference; otherwise retain the
-    // older sample until it expires or the pool becomes substantially deeper.
-    if (suspicious || liquidity > oldLiquidity * 1.25) {
-      token.r = [current[0], current[1], current[2], current[3], alertedAt];
+    // Critical conditions always take precedence over an early warning.
+    let pendingAt = critical ? 0 : Number(prior?.[5]) || 0;
+    let notifiedEarlyAt = earlyAt;
+    const earlyCondition = !critical && liquidityDrop >= EARLY_LIQUIDITY_DROP_PCT / 100;
+    const earlyCooldown = earlyAt > 0 && clock.getTime() - earlyAt * 1000 < EARLY_LIQUIDITY_COOLDOWN_MS;
+    if (earlyCondition && !earlyCooldown) {
+      const elapsed = ts - pendingAt;
+      if (pendingAt > 0 && elapsed >= 30 && elapsed <= EARLY_LIQUIDITY_CONFIRM_MAX_SECONDS) {
+        if (rugAlerts + earlyLiquidityAlerts < RUG_MAX_ALERTS_PER_REFRESH) {
+          try {
+            await client.request('/channels/' + channelId + '/messages', {
+              method: 'POST', body: {
+                embeds: [createEarlyLiquidityAlertEmbed(token, pair, oldLiquidity, clock)],
+                allowed_mentions: { parse: [] },
+              },
+            });
+            earlyLiquidityAlerts++;
+            notifiedEarlyAt = ts;
+            pendingAt = 0;
+          } catch (error) {
+            console.error('[tracker:liquidity] Could not post early warning for', token.chain, error.message);
+            // Hold the baseline; a further valid reading can retry.
+          }
+        }
+      } else if (!pendingAt || elapsed > EARLY_LIQUIDITY_CONFIRM_MAX_SECONDS) {
+        pendingAt = ts;
+      }
+    } else {
+      pendingAt = 0;
+    }
+    if (critical || liquidity > oldLiquidity * 1.25) {
+      token.r = [candidate[0], candidate[1], candidate[2], candidate[3],
+        confirmedRugAt, 0, notifiedEarlyAt];
+      changed = true;
+    } else if (pendingAt !== (Number(prior?.[5]) || 0) ||
+               notifiedEarlyAt !== earlyAt) {
+      token.r = [...prior.slice(0, 4), confirmedRugAt, pendingAt, notifiedEarlyAt];
       changed = true;
     }
   }
   if (changed) await saveStore(client, store);
-  return { rugAlerts, rugEnabled: true };
+  return { rugAlerts, earlyLiquidityAlerts, rugEnabled: true };
 }
 
 // DEX Screener reports rolling price changes and buy/sell transaction counts.
