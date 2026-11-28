@@ -255,3 +255,27 @@ test('reconciler does not restore a tracked token that a command removed',async(
  await saveRefreshState(f.client,f.store);
  assert.equal(f.store.config.tokens.length,0);
 });
+
+
+test('high-entropy maximum 25-token alert history fits Discord storage after upgrades',()=>{
+ let seed=927319;
+ const rnd=()=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed/4294967296};
+ const chars='123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+ const random=n=>Array.from({length:n},()=>chars[Math.floor(rnd()*chars.length)]).join('');
+ const tokens=Array.from({length:25},()=>{
+   const pool=random(16);
+   return {chain:'solana',address:random(44),symbol:random(24),
+     p:pool,d:[1760000000+Math.floor(rnd()*9e7),0,0],
+     r:[pool,Math.floor(rnd()*1e7)/100,Number(rnd().toPrecision(9)),
+       1760000000+Math.floor(rnd()*9e7),1760000000+Math.floor(rnd()*9e7),
+       1760000000+Math.floor(rnd()*9e7),1760000000+Math.floor(rnd()*9e7)],
+     h:Math.floor(rnd()*1e8),a:Math.floor(rnd()*1e8),
+     b:Math.floor(rnd()*1e8),t:1760000000+Math.floor(rnd()*9e7),
+     s:1760000000+Math.floor(rnd()*9e7),q:[1760000000+Math.floor(rnd()*9e7),pool]};
+ });
+ const cfg={version:1,dashboardChannelId:DASH,athChannelId:ATH,
+   rugChannelId:RUG,selloffChannelId:SELL,cv:8,tokens};
+ const embed=createStorageEmbed(cfg);
+ assert.ok(embed.description.length<=4096);
+ assert.deepEqual(parseConfig({embeds:[embed]}),cfg);
+});
