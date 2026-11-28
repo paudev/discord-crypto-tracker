@@ -682,7 +682,13 @@ export async function updateRugWatch(client, store, entries, { now, persist = tr
     const price = pair.priceUsd == null ? NaN : Number(pair.priceUsd);
     const key = poolKey(pair);
     if (!key || !Number.isFinite(liquidity) || liquidity < 0 ||
-        !Number.isFinite(price) || price <= 0) continue;
+        !Number.isFinite(price) || price <= 0) {
+      if (Number(prior?.[5]) > 0) {
+        token.r = [...prior.slice(0, 5), 0, Number(prior?.[6]) || 0];
+        changed = true;
+      }
+      continue; // Invalid sample must interrupt a two-reading confirmation.
+    }
     // Compact persisted sample:
     // [pool, baselineLiquidity, baselinePrice, sampledAt, rugAlertAt,
     //  pendingEarlyWarningAt, lastEarlyWarningAt].
@@ -875,7 +881,8 @@ export function captureMarketDiagnostics(entries, clock = new Date()) {
     const previous = token.p || token.r?.[0] || '';
     const switched = Boolean(current && previous && current !== previous);
     if (current) token.p = current;
-    if (switched) delete token.q; // never confirm an ATH across distinct pools
+    if (switched || !pair) delete token.q;
+    // A missing market sample cannot complete a two-reading ATH confirmation.
     token.d = [ts, pair ? 0 : error ? 2 : 1, switched ? 1 : 0];
   }
 }
