@@ -541,7 +541,10 @@ export async function updateObservedHighs(client, store, entries, { now, persist
   const clock = typeof now === 'function' ? now() : new Date();
   for (const { token, pair } of entries) {
     const marketCap = observedMarketCap(pair);
-    if (marketCap === null) continue;
+    if (marketCap === null) {
+      if (token.q) { delete token.q; changed = true; }
+      continue; // A missing MC also breaks ATH spike confirmation.
+    }
     const previous = Number(token.h);
     if (!Number.isFinite(previous) || previous <= 0) {
       token.h = marketCap;
