@@ -522,6 +522,26 @@ export async function updateObservedHighs(client, store, entries, { now } = {}) 
       token.a = previous;
       changed = true;
     }
+    // Exceptionally large one-minute jumps can reflect bad data from a DEX
+    // pool. Require another consecutive reading before recording/announcing
+    // an increase of >150% and at least $10k.
+    const isSpike = marketCap > previous * 2.5 && marketCap - previous > 10_000;
+    if (isSpike) {
+      const ts = Math.floor(clock.getTime() / 1000);
+      const key = poolKey(pair);
+      const pending = Array.isArray(token.q) ? token.q : null;
+      const elapsed = ts - (Number(pending?.[0]) || 0);
+      if (!pending || pending[1] !== key || elapsed < 30 || elapsed > 300) {
+        token.q = [ts, key];
+        changed = true;
+        continue;
+      }
+      delete token.q;
+      changed = true;
+    } else if (token.q) {
+      delete token.q;
+      changed = true;
+    }
     if (marketCap <= previous) continue;
     const manual=Number(token.b);
     const manualHigh=Number.isFinite(manual)&&manual>0?manual:0;
